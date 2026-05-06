@@ -41,31 +41,35 @@ const handleSubmit = async () => {
   loading.value = true
 
   try {
-    // 1. Check if name exists
-    const { data, error } = await supabase
-      .from('leaderboard')
-      .select('*')
-      .eq('name', name.value)
-      .single()
-
-    const nameExists = data !== null
-
-    // Ignore PGRST116 error (no rows returned) as it just means the name is available
-    if (error && error.code !== 'PGRST116') throw error
-
     if (props.mode === 'login') {
-      if (!nameExists) {
+      const { data, error } = await supabase.rpc('verify_user_pin', {
+        p_name: name.value,
+        p_pin: pin.value
+      })
+
+      if (error) throw error
+
+      if (!data || data.length === 0) {
         errorMsg.value = '존재하지 않는 닉네임입니다.'
         pin.value = ''
-      } else if (data.pin !== pin.value) {
+      } else if (!data[0].is_match) {
         errorMsg.value = '잘못된 핀 번호입니다.'
         pin.value = ''
       } else {
         // Success
-        emit('auth-success', { name: name.value, score: data.score || 0 })
+        emit('auth-success', { name: name.value, score: data[0].user_score || 0 })
       }
     } else if (props.mode === 'register') {
-      if (nameExists) {
+      // Check if name exists by selecting only name
+      const { data, error } = await supabase
+        .from('leaderboard')
+        .select('name')
+        .eq('name', name.value)
+        .single()
+        
+      if (error && error.code !== 'PGRST116') throw error
+
+      if (data !== null) {
         errorMsg.value = '이미 사용 중인 닉네임입니다.'
         pin.value = ''
       } else {
