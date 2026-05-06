@@ -93,6 +93,8 @@ onMounted(() => {
   max-height: 95%; /* Limit height to 95% of parent overlay */
   background-color: rgba(10, 10, 15, 0.95);
   padding: 30px;
+  box-sizing: border-box;
+  overflow: hidden;
   border-radius: 12px;
   border: 2px solid var(--secondary-color);
   box-shadow: 0 0 20px rgba(0, 204, 255, 0.3);

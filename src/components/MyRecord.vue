@@ -82,10 +82,12 @@ onMounted(() => {
   max-width: 500px;
   background-color: rgba(10, 10, 15, 0.95);
   padding: 30px;
+  box-sizing: border-box;
+  overflow: hidden;
   border-radius: 12px;
   border: 2px solid #ff00de;
   box-shadow: 0 0 20px rgba(255, 0, 222, 0.3);
-  max-height: 80vh;
+  max-height: 95%; /* Limit height to 95% of parent overlay */
 }
 
 .neon-title {
@@ -106,7 +108,7 @@ onMounted(() => {
 .scroll-container {
   width: 100%;
   overflow-y: auto;
-  max-height: 50vh;
+  flex: 1; /* Automatically shrink to fit remaining space */
   margin-bottom: 20px;
   padding-right: 10px;
 }
