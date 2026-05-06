@@ -3,6 +3,8 @@ import { ref, onUnmounted, computed, onMounted } from 'vue'
 import Hole from './components/Hole.vue'
 import AuthModal from './components/AuthModal.vue'
 import Leaderboard from './components/Leaderboard.vue'
+import MyRecord from './components/MyRecord.vue'
+import PixelMascot from './components/PixelMascot.vue'
 import { supabase } from './lib/supabase.js'
 
 const GAME_DURATION = 30
@@ -13,13 +15,15 @@ const gameState = ref('menu')
 
 const score = ref(0)
 const timeLeft = ref(GAME_DURATION)
-const personalBest = ref(0)
 
 const combo = ref(0)
 const isFever = ref(false)
 
 const currentName = ref('')
 const dbBestScore = ref(0)
+
+const countdownValue = ref(3)
+let countdownTimer = null
 
 const createEmptyHole = () => ({
   id: null,
@@ -36,10 +40,10 @@ const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole))
 let gameTimer = null
 let spawnTimer = null
 let feverTimer = null
+let gameStartTime = 0
 
 onMounted(() => {
-  const pb = localStorage.getItem('personalBest')
-  if (pb) personalBest.value = parseInt(pb, 10)
+  // Setup if needed
 })
 
 const multiplier = computed(() => {
@@ -48,13 +52,43 @@ const multiplier = computed(() => {
   return 1.0
 })
 
-const startAuth = () => {
+const authMode = ref('login')
+
+const startAuth = (mode) => {
+  authMode.value = mode
   gameState.value = 'auth'
 }
 
 const handleAuthSuccess = (userData) => {
   currentName.value = userData.name
   dbBestScore.value = userData.score
+  gameState.value = 'menu'
+}
+
+const prepareGame = () => {
+  gameState.value = 'countdown'
+  countdownValue.value = 3
+  countdownTimer = setInterval(() => {
+    countdownValue.value--
+    if (countdownValue.value === 0) {
+      clearInterval(countdownTimer)
+      startGame()
+    }
+  }, 1000)
+}
+
+const quitGame = () => {
+  clearInterval(gameTimer)
+  clearTimeout(spawnTimer)
+  clearTimeout(feverTimer)
+  isFever.value = false
+  holes.value.forEach((hole) => {
+    if (hole && hole.timeoutId) clearTimeout(hole.timeoutId)
+    if (hole) {
+      hole.active = false
+      hole.isHit = false
+    }
+  })
   gameState.value = 'menu'
 }
 
@@ -66,12 +100,15 @@ const startGame = () => {
   gameState.value = 'playing'
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole)
   
+  gameStartTime = Date.now()
+  
   gameTimer = setInterval(() => {
-    timeLeft.value--
+    const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000)
+    timeLeft.value = Math.max(0, GAME_DURATION - elapsedSeconds)
     if (timeLeft.value <= 0) {
       endGame()
     }
-  }, 1000)
+  }, 100) // check more frequently to be precise
 
   scheduleSpawn()
 }
@@ -91,10 +128,12 @@ const endGame = async () => {
     }
   })
 
-  // Update Personal Best
-  if (score.value > personalBest.value) {
-    personalBest.value = score.value
-    localStorage.setItem('personalBest', score.value)
+  // Hard Cap check (Anti-cheat for score forgery)
+  // Max possible score is around ~20k-25k realistically.
+  if (score.value > 30000 || score.value < -5000) {
+    console.warn('Abnormal score detected. Skipping DB upload.')
+    gameState.value = 'leaderboard'
+    return
   }
 
   // Auto-submit score to DB if it's a new best for this user
@@ -106,6 +145,18 @@ const endGame = async () => {
       dbBestScore.value = score.value
     } catch (err) {
       console.error('Failed to update DB score', err)
+    }
+  }
+
+  // Save to score history
+  if (currentName.value) {
+    try {
+      await supabase.from('score_history').insert({
+        name: currentName.value,
+        score: score.value
+      })
+    } catch (err) {
+      console.error('Failed to save history', err)
     }
   }
 
@@ -242,6 +293,7 @@ const handleHit = (index, entity) => {
 }
 
 onUnmounted(() => {
+  clearInterval(countdownTimer)
   clearInterval(gameTimer)
   clearTimeout(spawnTimer)
   clearTimeout(feverTimer)
@@ -253,19 +305,25 @@ onUnmounted(() => {
     <div class="game-container">
       
       <!-- Top Info Bar -->
-      <div class="top-info">
-        <div class="personal-best">TOP: {{ personalBest }}</div>
+      <div class="top-info" v-if="currentName">
+        <div class="personal-best">TOP: {{ dbBestScore }}</div>
+        <button v-if="gameState === 'playing'" @click="quitGame" class="quit-btn">포기하기</button>
       </div>
 
       <header class="game-header">
-        <div class="score-section">
-          <div class="score">SCORE: <span :class="{'negative': score < 0}">{{ score }}</span></div>
-          <div v-if="combo > 1" class="combo" :class="{'combo-high': combo >= 10, 'combo-fever': combo >= 20}">
-            {{ combo }} COMBO! <span v-if="multiplier > 1" class="multiplier">(x{{ multiplier }})</span>
-          </div>
+        <div class="score-container">
+          <div class="huge-score" :class="{'negative': score < 0}">{{ score }}</div>
+          <div class="timer-badge" :class="{ 'warning': timeLeft <= 5 && gameState === 'playing' }">TIME: {{ timeLeft }}s</div>
         </div>
-        <div class="timer" :class="{ 'warning': timeLeft <= 5 && gameState === 'playing' }">TIME: {{ timeLeft }}s</div>
       </header>
+
+      <!-- Combo Overlay (Absolute positioned to top right) -->
+      <div v-if="combo > 1 && gameState === 'playing'" class="combo-overlay" :key="combo">
+        <div class="huge-combo" :class="{'combo-high': combo >= 10, 'combo-fever': combo >= 20}">
+          {{ combo }} COMBO!
+          <span v-if="multiplier > 1" class="multiplier">x{{ multiplier }}</span>
+        </div>
+      </div>
 
       <div class="board-wrapper">
         <div class="grid">
@@ -278,12 +336,18 @@ onUnmounted(() => {
         </div>
 
         <!-- Overlays -->
-        <div v-if="gameState === 'menu'" class="overlay">
-          <h1>WHAC-A-MOLE</h1>
-          <p class="subtitle">Neo-Arcade Edition</p>
+        <div v-if="gameState === 'menu'" class="overlay menu-overlay">
+          <div class="crt-lines"></div>
+          <div class="particles-bg"></div>
+          
+          <PixelMascot />
+          
+          <h1 class="main-title">두더지 게임</h1>
+          <p class="subtitle">네오 아케이드 에디션</p>
+          
           <div class="legend" v-if="currentName">
-            <div class="legend-item" style="color: #00ffcc; justify-content: center; font-size: 1.5rem">
-              Welcome, {{ currentName }}!
+            <div class="legend-item welcome-msg">
+              반가워요, <span class="player-name">{{ currentName }}</span> 님!
             </div>
           </div>
           <div class="legend" v-else>
@@ -293,19 +357,31 @@ onUnmounted(() => {
             <div class="legend-item mt-small">⚡ 20 Combo = FEVER MODE!</div>
           </div>
           <div class="buttons-row">
-            <button v-if="!currentName" @click="startAuth" class="action-btn neon-btn">LOGIN</button>
-            <button v-else @click="startGame" class="action-btn neon-btn">START GAME</button>
-            <button @click="gameState = 'leaderboard'" class="action-btn">RANKING</button>
-            <button v-if="currentName" @click="currentName = ''" class="action-btn">LOGOUT</button>
+            <template v-if="!currentName">
+              <button @click="startAuth('login')" class="action-btn neon-btn">로그인</button>
+              <button @click="startAuth('register')" class="action-btn neon-btn">회원가입</button>
+            </template>
+            <button v-else @click="prepareGame" class="action-btn neon-btn">게임 시작</button>
+            <button @click="gameState = 'leaderboard'" class="action-btn neon-btn">랭킹</button>
+            <button v-if="currentName" @click="gameState = 'my_record'" class="action-btn neon-btn">내 기록</button>
+            <button v-if="currentName" @click="currentName = ''" class="action-btn neon-btn">로그아웃</button>
           </div>
         </div>
 
         <div v-if="gameState === 'auth'" class="overlay">
-          <AuthModal @close="gameState = 'menu'" @auth-success="handleAuthSuccess" />
+          <AuthModal :mode="authMode" @close="gameState = 'menu'" @auth-success="handleAuthSuccess" />
+        </div>
+
+        <div v-if="gameState === 'countdown'" class="overlay">
+          <div class="countdown-text">{{ countdownValue }}</div>
         </div>
 
         <div v-if="gameState === 'leaderboard'" class="overlay">
           <Leaderboard :current-score="score" :current-name="currentName" @close="gameState = 'menu'" />
+        </div>
+
+        <div v-if="gameState === 'my_record'" class="overlay">
+          <MyRecord :currentName="currentName" @close="gameState = 'menu'" />
         </div>
 
       </div>
@@ -340,75 +416,124 @@ onUnmounted(() => {
   width: 100%;
   max-width: 600px;
   margin: 0 auto;
+  position: relative;
 }
 
 .top-info {
-  text-align: right;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
   margin-bottom: 5px;
   color: #ffcc80;
   font-size: 1.2rem;
   letter-spacing: 1px;
 }
 
+.quit-btn {
+  background: none;
+  border: 1px solid #ff3366;
+  color: #ff3366;
+  padding: 4px 10px;
+  font-size: 0.9rem;
+  font-family: var(--font-pixel);
+  cursor: pointer;
+  border-radius: 4px;
+  margin-left: 15px;
+  transition: all 0.2s;
+}
+
+.quit-btn:hover {
+  background: #ff3366;
+  color: #000;
+}
+
 .game-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
   margin-bottom: 20px;
-  font-size: 1.5rem;
-  background-color: var(--grid-bg);
-  padding: 15px 20px;
-  border-radius: 8px;
-  border: 4px solid var(--hole-color);
-  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.5);
-  height: 80px;
+  background-color: transparent;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  height: auto;
 }
 
-.score-section {
+.score-container {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  gap: 10px;
 }
 
-.score .negative {
+.huge-score {
+  font-size: 5rem;
+  color: #00ffcc;
+  text-shadow: 0 0 20px #00ffcc, 0 0 40px rgba(0, 255, 204, 0.5);
+  line-height: 1;
+  transition: color 0.3s, text-shadow 0.3s;
+}
+
+.huge-score.negative {
   color: #ff3366;
+  text-shadow: 0 0 20px #ff3366, 0 0 40px rgba(255, 51, 102, 0.5);
 }
 
-.combo {
-  font-size: 1rem;
-  color: #aae;
-  animation: popIn 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+.timer-badge {
+  background-color: #222;
+  color: #fff;
+  padding: 5px 20px;
+  border-radius: 20px;
+  font-size: 1.5rem;
+  border: 2px solid #555;
+}
+
+.timer-badge.warning {
+  border-color: #ff3366;
+  color: #ff3366;
+  animation: pulse 1s infinite;
+}
+
+.combo-overlay {
+  position: absolute;
+  top: -10px;
+  right: 10px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.huge-combo {
+  font-size: 4rem;
+  color: #ff00de;
+  text-shadow: 0 0 20px #ff00de, 0 0 40px #ff00de;
+  white-space: nowrap;
+  animation: popBounce 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 .combo-high {
   color: #ffeb3b;
-  font-size: 1.2rem;
+  text-shadow: 0 0 20px #ffeb3b, 0 0 40px #ffeb3b;
+  font-size: 5rem;
 }
 
 .combo-fever {
-  color: #ff00de;
-  font-size: 1.2rem;
-  text-shadow: 0 0 5px #ff00de;
-  animation: shake 0.2s infinite;
+  color: #ff0000;
+  text-shadow: 0 0 20px #ff0000, 0 0 40px #ff0000, 0 0 60px #ff0000;
+  font-size: 6rem;
+  animation: popBounce 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275), shake 0.2s infinite;
 }
 
 .multiplier {
+  font-size: 0.6em;
   color: #fff;
+  vertical-align: top;
+  text-shadow: none;
 }
 
-@keyframes popIn {
-  0% { transform: scale(0.5); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
-}
-
-.timer {
-  color: var(--secondary-color);
-  font-size: 1.8rem;
-}
-
-.timer.warning {
-  color: #ff3366;
-  animation: pulse 1s infinite;
+@keyframes popBounce {
+  0% { transform: scale(0.5) translateY(50px); opacity: 0; }
+  50% { transform: scale(1.2) translateY(-20px); opacity: 1; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
 }
 
 @keyframes pulse {
@@ -446,23 +571,95 @@ onUnmounted(() => {
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(18, 18, 20, 0.95);
+  background-color: rgba(10, 10, 12, 0.98);
   border-radius: 8px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
   align-items: center;
-  z-index: 10;
-  backdrop-filter: blur(4px);
+  justify-content: center;
+  z-index: 1000;
+  overflow: hidden;
 }
 
-h1 {
-  color: var(--secondary-color);
-  font-size: 3rem;
-  margin-bottom: 5px;
-  text-align: center;
-  text-shadow: 0 0 10px var(--secondary-color);
+.menu-overlay {
+  background: radial-gradient(circle at center, #1a1a2e 0%, #0a0a0c 100%);
 }
+
+.countdown-text {
+  font-size: 8rem;
+  color: #00ffcc;
+  text-shadow: 0 0 20px #00ffcc;
+  animation: pop 1s infinite;
+  font-family: var(--font-pixel);
+  z-index: 20;
+}
+
+@keyframes pop {
+  0% { transform: scale(0.5); opacity: 0; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+.crt-lines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
+              linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+  background-size: 100% 3px, 3px 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.particles-bg {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    radial-gradient(1px 1px at 20px 30px, #fff, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 40px 70px, #fff, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 50px 160px, #fff, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 80px 120px, #fff, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 110px 10px, #fff, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 150px 150px, #fff, rgba(0,0,0,0));
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  animation: bgScroll 20s linear infinite;
+  opacity: 0.2;
+  pointer-events: none;
+}
+
+@keyframes bgScroll {
+  from { background-position: 0 0; }
+  to { background-position: 0 200px; }
+}
+
+.main-title {
+  font-size: 4.5rem;
+  background: linear-gradient(to bottom, #fff 0%, #00ffcc 50%, #00ccaa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 15px rgba(0, 255, 204, 0.4));
+  margin-bottom: 5px;
+  letter-spacing: -2px;
+  z-index: 20;
+}
+
+.welcome-msg {
+  color: #fff !important;
+  font-size: 1.6rem !important;
+  justify-content: center !important;
+}
+
+.player-name {
+  color: #00ffcc;
+  text-shadow: 0 0 10px #00ffcc;
+  font-weight: bold;
+}
+
+
 
 .subtitle {
   color: #fff;
@@ -499,6 +696,8 @@ h1 {
 .buttons-row {
   display: flex;
   gap: 15px;
+  position: relative;
+  z-index: 20;
 }
 
 .action-btn {

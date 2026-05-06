@@ -25,7 +25,7 @@ const fetchScores = async () => {
       .from('leaderboard')
       .select('name, score')
       .order('score', { ascending: false })
-      .limit(10)
+      .limit(100)
       
     if (error) throw error
     scores.value = data
@@ -48,34 +48,36 @@ onMounted(() => {
     
     <div v-if="loading" class="loading">LOADING SCORES...</div>
     
-    <table v-else class="score-table">
-      <thead>
-        <tr>
-          <th>RANK</th>
-          <th>NAME</th>
-          <th>SCORE</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr 
-          v-for="(entry, index) in scores" 
-          :key="index"
-          :class="{ 'current-player': entry.name === currentName && entry.score === currentScore }"
-        >
-          <td class="rank">
-            <span v-if="index === 0">👑 1ST</span>
-            <span v-else-if="index === 1">🥈 2ND</span>
-            <span v-else-if="index === 2">🥉 3RD</span>
-            <span v-else>{{ index + 1 }}TH</span>
-          </td>
-          <td class="name">{{ entry.name }}</td>
-          <td class="score">{{ entry.score }}</td>
-        </tr>
-        <tr v-if="scores.length === 0">
-          <td colspan="3" class="empty">NO SCORES YET. BE THE FIRST!</td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-else class="scroll-container">
+      <table class="score-table">
+        <thead>
+          <tr>
+            <th>RANK</th>
+            <th>NAME</th>
+            <th>SCORE</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr 
+            v-for="(entry, index) in scores" 
+            :key="index"
+            :class="{ 'current-player': entry.name === currentName && entry.score === currentScore }"
+          >
+            <td class="rank">
+              <span v-if="index === 0">👑 1ST</span>
+              <span v-else-if="index === 1">🥈 2ND</span>
+              <span v-else-if="index === 2">🥉 3RD</span>
+              <span v-else>{{ index + 1 }}TH</span>
+            </td>
+            <td class="name">{{ entry.name }}</td>
+            <td class="score">{{ entry.score }}</td>
+          </tr>
+          <tr v-if="scores.length === 0">
+            <td colspan="3" class="empty">NO SCORES YET. BE THE FIRST!</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     
     <button class="back-btn" @click="emit('close')">MAIN MENU</button>
   </div>
@@ -88,11 +90,33 @@ onMounted(() => {
   align-items: center;
   width: 100%;
   max-width: 500px;
+  max-height: 95%; /* Limit height to 95% of parent overlay */
   background-color: rgba(10, 10, 15, 0.95);
   padding: 30px;
   border-radius: 12px;
   border: 2px solid var(--secondary-color);
   box-shadow: 0 0 20px rgba(0, 204, 255, 0.3);
+}
+
+.scroll-container {
+  width: 100%;
+  overflow-y: auto;
+  flex: 1; /* Automatically shrink to fit remaining space */
+  margin-bottom: 20px;
+  padding-right: 10px;
+}
+
+/* Scrollbar styles */
+.scroll-container::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+}
+.scroll-container::-webkit-scrollbar-thumb {
+  background: var(--secondary-color);
+  border-radius: 4px;
 }
 
 .neon-title {
@@ -140,6 +164,10 @@ th {
   text-align: left;
   padding-bottom: 15px;
   border-bottom: 2px solid #333;
+  position: sticky;
+  top: 0;
+  background-color: rgba(10, 10, 15, 0.95);
+  z-index: 1;
 }
 
 th:last-child {

@@ -107,13 +107,16 @@ const entityClass = computed(() => {
   bottom: 0;
   left: 0;
   transform: translateY(100%);
-  transition: transform 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  visibility: hidden;
+  transition: transform 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94), visibility 0s linear 0.15s;
   pointer-events: none; /* Make clicks pass through to the hole if not fully up, or maybe handled by parent */
-  will-change: transform;
+  will-change: transform, visibility;
 }
 
 .entity-wrapper.is-active {
   transform: translateY(0);
+  visibility: visible;
+  transition: transform 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94), visibility 0s;
   pointer-events: auto; /* Clickable when up */
 }
 

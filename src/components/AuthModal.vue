@@ -1,15 +1,23 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { supabase } from '../lib/supabase.js'
+
+const props = defineProps({
+  mode: {
+    type: String,
+    required: true, // 'login' or 'register'
+  }
+})
 
 const emit = defineEmits(['close', 'auth-success'])
 
-const step = ref('name') // 'name', 'verify_pin', 'create_pin'
 const name = ref('')
 const pin = ref('')
 const errorMsg = ref('')
 const loading = ref(false)
-const dbRecord = ref(null)
+
+const title = computed(() => props.mode === 'login' ? '로그인' : '회원가입')
+const buttonText = computed(() => props.mode === 'login' ? '로그인' : '가입하기')
 
 const validateName = () => {
   name.value = name.value.trim().toUpperCase().replace(/[^A-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ]/g, '').slice(0, 8)
@@ -19,75 +27,62 @@ const validatePin = () => {
   pin.value = pin.value.replace(/[^0-9]/g, '').slice(0, 4)
 }
 
-const checkName = async () => {
+const handleSubmit = async () => {
   if (name.value.length < 2) {
-    errorMsg.value = 'NAME MUST BE 2-8 CHARS'
+    errorMsg.value = '닉네임은 2~8글자여야 합니다.'
     return
   }
-  
+  if (pin.value.length !== 4) {
+    errorMsg.value = '핀 번호는 4자리 숫자여야 합니다.'
+    return
+  }
+
   errorMsg.value = ''
   loading.value = true
-  
+
   try {
+    // 1. Check if name exists
     const { data, error } = await supabase
       .from('leaderboard')
       .select('*')
       .eq('name', name.value)
       .single()
-      
-    // single() throws an error if no rows found in real Supabase
-    // Our mock returns data: null if not found
-    
-    if (data) {
-      dbRecord.value = data
-      step.value = 'verify_pin'
-    } else {
-      // Not found
-      step.value = 'create_pin'
-    }
-  } catch (err) {
-    if (err.code === 'PGRST116') {
-      // Supabase specific error for single() finding no rows
-      step.value = 'create_pin'
-    } else {
-      errorMsg.value = 'ERROR CONNECTING TO DB'
-    }
-  } finally {
-    loading.value = false
-  }
-}
 
-const submitPin = async () => {
-  if (pin.value.length !== 4) {
-    errorMsg.value = 'PIN MUST BE 4 DIGITS'
-    return
-  }
+    const nameExists = data !== null
 
-  errorMsg.value = ''
-  loading.value = true
+    // Ignore PGRST116 error (no rows returned) as it just means the name is available
+    if (error && error.code !== 'PGRST116') throw error
 
-  try {
-    if (step.value === 'verify_pin') {
-      if (dbRecord.value.pin === pin.value) {
-        // Success
-        emit('auth-success', { name: name.value, score: dbRecord.value.score || 0 })
-      } else {
-        errorMsg.value = 'INCORRECT PIN!'
+    if (props.mode === 'login') {
+      if (!nameExists) {
+        errorMsg.value = '존재하지 않는 닉네임입니다.'
         pin.value = ''
+      } else if (data.pin !== pin.value) {
+        errorMsg.value = '잘못된 핀 번호입니다.'
+        pin.value = ''
+      } else {
+        // Success
+        emit('auth-success', { name: name.value, score: data.score || 0 })
       }
-    } else if (step.value === 'create_pin') {
-      // Create new record
-      const { error } = await supabase.from('leaderboard').insert({
-        name: name.value,
-        pin: pin.value,
-        score: 0
-      })
-      if (error) throw error
-      
-      emit('auth-success', { name: name.value, score: 0 })
+    } else if (props.mode === 'register') {
+      if (nameExists) {
+        errorMsg.value = '이미 사용 중인 닉네임입니다.'
+        pin.value = ''
+      } else {
+        // Insert new record
+        const { error: insertError } = await supabase.from('leaderboard').insert({
+          name: name.value,
+          pin: pin.value,
+          score: 0
+        })
+        if (insertError) throw insertError
+        
+        emit('auth-success', { name: name.value, score: 0 })
+      }
     }
   } catch (err) {
-    errorMsg.value = 'ERROR SAVING TO DB'
+    console.error(err)
+    errorMsg.value = '데이터베이스 오류가 발생했습니다.'
   } finally {
     loading.value = false
   }
@@ -97,56 +92,38 @@ const submitPin = async () => {
 <template>
   <div class="auth-container">
     <button class="close-btn" @click="emit('close')">X</button>
-    <h2 class="neon-text">PLAYER LOGIN</h2>
+    <h2 class="neon-text">{{ title }}</h2>
     
-    <div v-if="step === 'name'" class="form-group">
-      <p class="instruction">ENTER NICKNAME (MAX 8)</p>
-      <input 
-        type="text" 
-        v-model="name" 
-        @input="validateName"
-        @keyup.enter="checkName"
-        class="arcade-input"
-        placeholder="PLAYER1"
-        :disabled="loading"
-        autofocus
-      />
-      <button class="action-btn neon-btn" @click="checkName" :disabled="loading">
-        {{ loading ? 'WAIT...' : 'NEXT' }}
-      </button>
-    </div>
+    <div class="form-group">
+      <div class="input-wrapper">
+        <p class="instruction">닉네임 (최대 8자)</p>
+        <input 
+          type="text" 
+          v-model="name" 
+          @input="validateName"
+          @keyup.enter="handleSubmit"
+          class="arcade-input"
+          placeholder="PLAYER1"
+          :disabled="loading"
+          autofocus
+        />
+      </div>
 
-    <div v-if="step === 'verify_pin'" class="form-group">
-      <p class="instruction">WELCOME BACK! ENTER 4-DIGIT PIN</p>
-      <input 
-        type="password" 
-        v-model="pin" 
-        @input="validatePin"
-        @keyup.enter="submitPin"
-        class="arcade-input pin-input"
-        placeholder="****"
-        :disabled="loading"
-        autofocus
-      />
-      <button class="action-btn neon-btn" @click="submitPin" :disabled="loading">
-        {{ loading ? 'WAIT...' : 'LOGIN' }}
-      </button>
-    </div>
+      <div class="input-wrapper">
+        <p class="instruction">비밀번호 (숫자 4자리)</p>
+        <input 
+          type="password" 
+          v-model="pin" 
+          @input="validatePin"
+          @keyup.enter="handleSubmit"
+          class="arcade-input pin-input"
+          placeholder="****"
+          :disabled="loading"
+        />
+      </div>
 
-    <div v-if="step === 'create_pin'" class="form-group">
-      <p class="instruction">NEW PLAYER! SET A 4-DIGIT PIN</p>
-      <input 
-        type="password" 
-        v-model="pin" 
-        @input="validatePin"
-        @keyup.enter="submitPin"
-        class="arcade-input pin-input"
-        placeholder="****"
-        :disabled="loading"
-        autofocus
-      />
-      <button class="action-btn neon-btn" @click="submitPin" :disabled="loading">
-        {{ loading ? 'WAIT...' : 'REGISTER' }}
+      <button class="action-btn neon-btn submit-btn" @click="handleSubmit" :disabled="loading">
+        {{ loading ? '잠시만요...' : buttonText }}
       </button>
     </div>
 
@@ -198,13 +175,18 @@ const submitPin = async () => {
   flex-direction: column;
   align-items: center;
   width: 100%;
-  gap: 15px;
+  gap: 20px;
+}
+
+.input-wrapper {
+  width: 100%;
 }
 
 .instruction {
   color: #aaa;
-  font-size: 1.2rem;
-  text-align: center;
+  font-size: 1.1rem;
+  text-align: left;
+  margin-bottom: 5px;
 }
 
 .arcade-input {
@@ -216,6 +198,7 @@ const submitPin = async () => {
   padding: 10px;
   text-align: center;
   width: 100%;
+  box-sizing: border-box;
   border-radius: 4px;
   outline: none;
   transition: border-color 0.3s;
@@ -228,9 +211,14 @@ const submitPin = async () => {
   letter-spacing: 10px;
 }
 
-.action-btn {
+.submit-btn {
   width: 100%;
   margin-top: 10px;
+}
+
+.action-btn {
+  font-size: 1.2rem;
+  padding: 15px 25px;
 }
 
 .neon-btn {
@@ -251,6 +239,8 @@ const submitPin = async () => {
   color: #ff3366;
   margin-top: 20px;
   font-size: 1.2rem;
+  text-align: center;
+  text-shadow: 0 0 5px rgba(255, 51, 102, 0.5);
   animation: shake 0.3s;
 }
 

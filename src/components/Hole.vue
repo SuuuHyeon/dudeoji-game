@@ -11,7 +11,9 @@ const props = defineProps({
 
 const emit = defineEmits(['hit'])
 
-const handleHit = () => {
+const handleHit = (event) => {
+  if (!event || !event.isTrusted) return // Block scripted clicks
+
   if (props.entity && props.entity.active) {
     emit('hit', props.entity)
   }

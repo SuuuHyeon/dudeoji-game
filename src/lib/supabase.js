@@ -13,19 +13,17 @@ if (supabaseUrl && supabaseAnonKey) {
   console.warn('Supabase keys not found in .env. Using LocalStorage mock for leaderboard.')
   
   // Helper to read/write mock data
-  const getMockData = () => {
-    const dataStr = localStorage.getItem('mock_leaderboard')
+  const getMockData = (table) => {
+    const dataStr = localStorage.getItem(`mock_${table}`)
     return dataStr ? JSON.parse(dataStr) : []
   }
-  const saveMockData = (data) => {
-    localStorage.setItem('mock_leaderboard', JSON.stringify(data))
+  const saveMockData = (table, data) => {
+    localStorage.setItem(`mock_${table}`, JSON.stringify(data))
   }
 
   // Mock Supabase Client using localStorage
   supabase = {
     from: (table) => {
-      if (table !== 'leaderboard') throw new Error('Mock only supports leaderboard table')
-      
       return {
         select: (fields) => {
           return {
@@ -34,11 +32,33 @@ if (supabaseUrl && supabaseAnonKey) {
                 single: () => {
                   return new Promise((resolve) => {
                     setTimeout(() => {
-                      const data = getMockData()
+                      const data = getMockData(table)
                       const record = data.find(r => r[column] === value)
                       resolve({ data: record || null, error: null })
                     }, 200)
                   })
+                },
+                order: (orderCol, { ascending = false } = {}) => {
+                  return new Promise((resolve) => {
+                    setTimeout(() => {
+                      const data = getMockData(table)
+                      let filtered = data.filter(r => r[column] === value)
+                      filtered.sort((a, b) => {
+                        // Simple sorting, assuming numeric or date strings
+                        if (a[orderCol] < b[orderCol]) return ascending ? -1 : 1
+                        if (a[orderCol] > b[orderCol]) return ascending ? 1 : -1
+                        return 0
+                      })
+                      resolve({ data: filtered, error: null })
+                    }, 200)
+                  })
+                },
+                then: (resolve) => {
+                  setTimeout(() => {
+                    const data = getMockData(table)
+                    const filtered = data.filter(r => r[column] === value)
+                    resolve({ data: filtered, error: null })
+                  }, 200)
                 }
               }
             },
@@ -47,7 +67,7 @@ if (supabaseUrl && supabaseAnonKey) {
                 limit: (count) => {
                   return new Promise((resolve) => {
                     setTimeout(() => {
-                      let data = getMockData()
+                      let data = getMockData(table)
                       // Sort
                       data.sort((a, b) => ascending ? a[column] - b[column] : b[column] - a[column])
                       // Limit
@@ -65,7 +85,7 @@ if (supabaseUrl && supabaseAnonKey) {
         insert: (records) => {
           return new Promise((resolve) => {
             setTimeout(() => {
-              let data = getMockData()
+              let data = getMockData(table)
               const newRecords = Array.isArray(records) ? records : [records]
               const inserted = newRecords.map(r => ({
                 id: Date.now() + Math.random(),
@@ -74,7 +94,7 @@ if (supabaseUrl && supabaseAnonKey) {
               }))
               
               data = [...data, ...inserted]
-              saveMockData(data)
+              saveMockData(table, data)
               resolve({ data: inserted, error: null })
             }, 200)
           })
@@ -84,11 +104,11 @@ if (supabaseUrl && supabaseAnonKey) {
             eq: (column, value) => {
               return new Promise((resolve) => {
                 setTimeout(() => {
-                  let data = getMockData()
+                  let data = getMockData(table)
                   const index = data.findIndex(r => r[column] === value)
                   if (index !== -1) {
                     data[index] = { ...data[index], ...updates }
-                    saveMockData(data)
+                    saveMockData(table, data)
                   }
                   resolve({ data: [data[index]], error: null })
                 }, 200)
