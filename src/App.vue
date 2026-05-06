@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onUnmounted, computed, onMounted } from 'vue'
+import { ref, onUnmounted, computed, onMounted, watch } from 'vue'
 import Hole from './components/Hole.vue'
 import AuthModal from './components/AuthModal.vue'
 import Leaderboard from './components/Leaderboard.vue'
@@ -25,6 +25,20 @@ const dbBestScore = ref(0)
 
 const countdownValue = ref(3)
 let countdownTimer = null
+
+const maxCombo = ref(0)
+const bombsHit = ref(0)
+
+const trackEvent = (eventName, params = {}) => {
+  if (window.gtag) {
+    window.gtag('event', eventName, params)
+  }
+}
+
+watch(gameState, (newVal) => {
+  if (newVal === 'leaderboard') trackEvent('view_leaderboard')
+  if (newVal === 'my_record') trackEvent('view_my_record')
+})
 
 const createEmptyHole = () => ({
   id: null,
@@ -58,6 +72,7 @@ const authMode = ref('login')
 const startAuth = (mode) => {
   authMode.value = mode
   gameState.value = 'auth'
+  trackEvent(mode === 'register' ? 'click_register' : 'click_login')
 }
 
 const handleAuthSuccess = (userData) => {
@@ -65,9 +80,15 @@ const handleAuthSuccess = (userData) => {
   currentPin.value = userData.pin
   dbBestScore.value = userData.score
   gameState.value = 'menu'
+  
+  // Track login/auth success
+  trackEvent(authMode.value === 'register' ? 'sign_up_complete' : 'login_success', { method: 'pin' })
 }
 
 const prepareGame = () => {
+  // Track game start
+  trackEvent('game_start', { method: 'button' })
+  
   gameState.value = 'countdown'
   countdownValue.value = 3
   countdownTimer = setInterval(() => {
@@ -80,6 +101,7 @@ const prepareGame = () => {
 }
 
 const quitGame = () => {
+  trackEvent('game_quit')
   clearInterval(gameTimer)
   clearTimeout(spawnTimer)
   clearTimeout(feverTimer)
@@ -98,6 +120,8 @@ const startGame = () => {
   score.value = 0
   timeLeft.value = GAME_DURATION
   combo.value = 0
+  maxCombo.value = 0
+  bombsHit.value = 0
   isFever.value = false
   gameState.value = 'playing'
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole)
@@ -147,6 +171,14 @@ const endGame = async () => {
     gameState.value = 'leaderboard'
     return
   }
+  
+  // Track game end with score
+  trackEvent('game_end', {
+    final_score: score.value,
+    max_combo: maxCombo.value,
+    bombs_hit: bombsHit.value,
+    name: currentName.value
+  })
 
   // Generate Cryptographic Hash Signature
   const signature = await generateSignature(currentName.value, score.value)
@@ -285,7 +317,12 @@ const handleHit = (index, entity) => {
   } else if (entity.type === 'bomb') {
     baseScore = -200
     color = '#ff3366'
+    bombsHit.value++
     breakCombo()
+  }
+
+  if (combo.value > maxCombo.value) {
+    maxCombo.value = combo.value
   }
 
   // Check Fever trigger
