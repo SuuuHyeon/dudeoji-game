@@ -1,5 +1,44 @@
-# Vue 3 + Vite
+# 🕹️ 두더지 잡기 게임 (Whac-A-Mole)
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+> "스트레스 받을 땐 냅다 때리는 게 최고죠!"
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+웹에서 가볍게 즐길 수 있는 **레트로 아케이드 감성의 두더지 잡기 게임**입니다. 
+머리를 비우고 싶을 때, 심심할 때, 친구들이랑 점수 내기하고 싶을 때 언제든 들어와서 신나게 두들겨 주세요! 🔨✨
+
+## 🎮 게임 해보기
+👉 **[https://dudeoji-game.vercel.app/]**
+
+---
+
+## 💡 어떻게 하나요?
+
+아주 간단합니다. 30초 동안 구멍에서 튀어나오는 녀석들을 찰지게 때려잡으시면 됩니다!
+
+- 🟫 **일반 두더지 (+100점)**: 눈에 보이는 대로 빠르게 잡아주세요.
+- 🟨 **황금 두더지 (+300점)**: 놓치면 아쉬운 꿀 점수!
+- 💣 **폭탄 (-200점)**: 때리면 앗 뜨거! 점수가 깎이니 조심하세요.
+
+### 🔥 콤보 & 피버 모드
+폭탄을 치지 않고 연속으로 잡으면 콤보가 쌓입니다. 
+콤보가 쌓일수록 타격 점수가 1.5배, 2배로 뻥튀기되는 '피버 모드'가 발동되니 신들린 컨트롤을 보여주세요!
+
+---
+
+## 🏆 명예의 전당 (리더보드)
+
+이 게임에는 무려 **실시간 랭킹 시스템**이 있습니다! 
+처음 오셨다면 닉네임과 숫자 4자리(비밀번호)만 대충 정해서 가입하시고, 랭킹 1위를 탈환해 보세요. 
+(은근히 친구들끼리 경쟁하면 시간 가는 줄 모릅니다 😎)
+
+> **보안 안내 🛡️** 
+> 꼼수로 점수 올리는 걸 막기 위해 나름 깐깐한 보안(매크로 봇 방지, 브라우저 시간 조작 방지, 해시 암호화 서명 등)을 걸어두었습니다. 개발자 도구 열지 마시고 정정당당하게 실력으로 1위를 노려주세요!
+
+---
+
+<!-- ### 🛠️ TMI (어떻게 만들었나요?)
+거창한 기술 자랑은 생략하고, 아주 가볍고 빠른 도구들을 썼습니다!
+- **Frontend**: Vue 3 + Vite
+- **Backend/DB**: Supabase
+- **스타일**: 오직 CSS (레트로 픽셀 감성과 네온사인을 낭낭하게 섞어보았습니다 👾) -->
+
+재밌게 즐겨주셨으면 좋겠습니다. 최고 점수를 갱신하셨다면 언제든 편하게 자랑해 주세요! 즐겜! 🚀
