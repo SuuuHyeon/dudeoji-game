@@ -35,6 +35,19 @@ const trackEvent = (eventName, params = {}) => {
   }
 }
 
+const identifyUser = (name) => {
+  if (window.gtag) {
+    // 구글 애널리틱스에 유저 ID 설정 (G-WCZJ0R9Y0P는 index.html과 동일해야 함)
+    window.gtag('config', 'G-WCZJ0R9Y0P', {
+      'user_id': name
+    })
+    // 유저 속성으로 닉네임 저장
+    window.gtag('set', 'user_properties', {
+      'nickname': name
+    })
+  }
+}
+
 watch(gameState, (newVal) => {
   if (newVal === 'leaderboard') trackEvent('view_leaderboard')
   if (newVal === 'my_record') trackEvent('view_my_record')
@@ -82,6 +95,7 @@ const handleAuthSuccess = (userData) => {
   gameState.value = 'menu'
   
   // Track login/auth success
+  identifyUser(userData.name)
   trackEvent(authMode.value === 'register' ? 'sign_up_complete' : 'login_success', { method: 'pin' })
 }
 
@@ -421,7 +435,7 @@ onUnmounted(() => {
             <button v-else @click="prepareGame" class="action-btn neon-btn">게임 시작</button>
             <button @click="gameState = 'leaderboard'" class="action-btn neon-btn">랭킹</button>
             <button v-if="currentName" @click="gameState = 'my_record'" class="action-btn neon-btn">내 기록</button>
-            <button v-if="currentName" @click="currentName = ''" class="action-btn neon-btn">로그아웃</button>
+            <button v-if="currentName" @click="currentName = ''; identifyUser(null)" class="action-btn neon-btn">로그아웃</button>
           </div>
         </div>
 
