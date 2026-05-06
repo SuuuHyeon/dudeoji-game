@@ -57,7 +57,7 @@ const handleSubmit = async () => {
         pin.value = ''
       } else {
         // Success
-        emit('auth-success', { name: name.value, score: data[0].user_score || 0 })
+        emit('auth-success', { name: name.value, pin: pin.value, score: data[0].user_score || 0 })
       }
     } else if (props.mode === 'register') {
       // Check if name exists by selecting only name
@@ -81,7 +81,7 @@ const handleSubmit = async () => {
         })
         if (insertError) throw insertError
         
-        emit('auth-success', { name: name.value, score: 0 })
+        emit('auth-success', { name: name.value, pin: pin.value, score: 0 })
       }
     }
   } catch (err) {

@@ -20,6 +20,7 @@ const combo = ref(0)
 const isFever = ref(false)
 
 const currentName = ref('')
+const currentPin = ref('')
 const dbBestScore = ref(0)
 
 const countdownValue = ref(3)
@@ -61,6 +62,7 @@ const startAuth = (mode) => {
 
 const handleAuthSuccess = (userData) => {
   currentName.value = userData.name
+  currentPin.value = userData.pin
   dbBestScore.value = userData.score
   gameState.value = 'menu'
 }
@@ -113,6 +115,16 @@ const startGame = () => {
   scheduleSpawn()
 }
 
+const generateSignature = async (name, score) => {
+  const salt = import.meta.env.VITE_GAME_SECRET_SALT || 'default_arcade_salt_123!'
+  const message = `${name}:${score}:${salt}`
+  const msgBuffer = new TextEncoder().encode(message)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+  return hashHex
+}
+
 const endGame = async () => {
   clearInterval(gameTimer)
   clearTimeout(spawnTimer)
@@ -136,24 +148,32 @@ const endGame = async () => {
     return
   }
 
+  // Generate Cryptographic Hash Signature
+  const signature = await generateSignature(currentName.value, score.value)
+
   // Auto-submit score to DB if it's a new best for this user
   if (score.value > dbBestScore.value) {
     try {
-      await supabase.from('leaderboard').update({
-        score: score.value
-      }).eq('name', currentName.value)
+      await supabase.rpc('update_best_score', {
+        p_name: currentName.value,
+        p_pin: currentPin.value,
+        p_score: score.value,
+        p_signature: signature
+      })
       dbBestScore.value = score.value
     } catch (err) {
       console.error('Failed to update DB score', err)
     }
   }
 
-  // Save to score history
+  // Always append to history
   if (currentName.value) {
     try {
-      await supabase.from('score_history').insert({
-        name: currentName.value,
-        score: score.value
+      await supabase.rpc('insert_score_history', {
+        p_name: currentName.value,
+        p_pin: currentPin.value,
+        p_score: score.value,
+        p_signature: signature
       })
     } catch (err) {
       console.error('Failed to save history', err)
