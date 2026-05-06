@@ -60,27 +60,17 @@ const handleSubmit = async () => {
         emit('auth-success', { name: name.value, pin: pin.value, score: data[0].user_score || 0 })
       }
     } else if (props.mode === 'register') {
-      // Check if name exists by selecting only name
-      const { data, error } = await supabase
-        .from('leaderboard')
-        .select('name')
-        .eq('name', name.value)
-        .single()
+      const { data, error } = await supabase.rpc('register_user', {
+        p_name: name.value,
+        p_pin: pin.value
+      })
         
-      if (error && error.code !== 'PGRST116') throw error
+      if (error) throw error
 
-      if (data !== null) {
+      if (data === false) {
         errorMsg.value = '이미 사용 중인 닉네임입니다.'
         pin.value = ''
       } else {
-        // Insert new record
-        const { error: insertError } = await supabase.from('leaderboard').insert({
-          name: name.value,
-          pin: pin.value,
-          score: 0
-        })
-        if (insertError) throw insertError
-        
         emit('auth-success', { name: name.value, pin: pin.value, score: 0 })
       }
     }
