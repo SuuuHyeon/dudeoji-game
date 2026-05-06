@@ -411,12 +411,11 @@ onUnmounted(() => {
 
 <style scoped>
 .app-wrapper {
-  /* width: 100vw; */
-  height: 100vh;
+  min-height: 100dvh;
   display: flex;
-  justify-content: center;
-  align-items: center;
+  flex-direction: column;
   transition: background-color 0.3s;
+  box-sizing: border-box;
 }
 
 /* Fever Background Animation applied to wrapper if we wanted, but we can't change body from scoped easily. 
@@ -435,8 +434,10 @@ onUnmounted(() => {
   flex-direction: column;
   width: 100%;
   max-width: 600px;
-  margin: 0 auto;
+  margin: auto;
   position: relative;
+  padding: 20px 0;
+  box-sizing: border-box;
 }
 
 .top-info {
