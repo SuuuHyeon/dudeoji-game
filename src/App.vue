@@ -101,11 +101,14 @@ function enforceAntiCheat() {
   // 게임 중일 때만 검사하여 조건 도달 시 즉시 포기 처리
   if (gameState.value !== 'playing') return;
   if (suspiciousClicks >= 5 || score.value > 30000 || score.value < -5000) {
-    alert('잡았다요놈');
     console.warn(
       'Abnormal gameplay detected (Macro/Bot). Game forced to quit.',
     );
+    // 화면을 메인 메뉴로 먼저 전환하여 렌더링 락(Lock)을 방지합니다.
     quitGame();
+    setTimeout(() => {
+      alert('잡았다요놈');
+    }, 50);
   }
 }
 
@@ -271,9 +274,12 @@ const endGame = async () => {
   // Hard Cap check (Anti-cheat for score forgery)
   // Max possible score is around ~20k-25k realistically.
   if (score.value > 30000 || score.value < -5000 || suspiciousClicks >= 5) {
-    alert('잡았다요놈');
     console.warn('Abnormal gameplay detected (Macro/Bot). Skipping DB upload.');
+    // 화면을 리더보드/메뉴로 먼저 전환
     gameState.value = 'menu';
+    setTimeout(() => {
+      alert('잡았다요놈');
+    }, 50);
     return;
   }
 
