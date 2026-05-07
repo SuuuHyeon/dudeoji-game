@@ -84,6 +84,7 @@ const createEmptyHole = () => ({
 const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole));
 
 let suspiciousClicks = 0;
+let clickTimestamps = []; // 마우스 광클 방지를 위한 클릭 시간 기록 배열
 
 // DOM 탐색 매크로를 유인하는 '투명 허니팟(가짜 두더지)' 데이터
 const honeypotEntity = ref({
@@ -135,6 +136,20 @@ const trackInputTypePointer = (e) => {
     lastInputIsTouch = true;
   } else if (e.pointerType === 'mouse') {
     lastInputIsTouch = false;
+
+    // 오토마우스(광클) 실시간 방어: 0.5초 이내에 8번 이상 마우스 클릭 시 즉시 차단
+    if (gameState.value === 'playing') {
+      const now = Date.now();
+      clickTimestamps.push(now);
+      // 최근 500ms(0.5초) 이내의 클릭 기록만 남깁니다.
+      clickTimestamps = clickTimestamps.filter((t) => now - t < 500);
+
+      if (clickTimestamps.length >= 8) {
+        suspiciousClicks += 5; // 즉시 섀도우 밴 기준치 초과!
+        console.warn('[매크로 적발] 비정상적인 광클(Auto-Clicker) 감지!');
+        enforceAntiCheat();
+      }
+    }
   }
 };
 
@@ -227,6 +242,7 @@ const startGame = () => {
   isFever.value = false;
   consecutiveBombs = 0;
   suspiciousClicks = 0;
+  clickTimestamps = [];
   gameState.value = 'playing';
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
 
