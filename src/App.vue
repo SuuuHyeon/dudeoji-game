@@ -1,57 +1,57 @@
 <script setup>
-import { ref, onUnmounted, computed, onMounted, watch } from 'vue'
-import Hole from './components/Hole.vue'
-import AuthModal from './components/AuthModal.vue'
-import Leaderboard from './components/Leaderboard.vue'
-import MyRecord from './components/MyRecord.vue'
-import PixelMascot from './components/PixelMascot.vue'
-import { supabase } from './lib/supabase.js'
+import { ref, onUnmounted, computed, onMounted, watch } from 'vue';
+import Hole from './components/Hole.vue';
+import AuthModal from './components/AuthModal.vue';
+import Leaderboard from './components/Leaderboard.vue';
+import MyRecord from './components/MyRecord.vue';
+import PixelMascot from './components/PixelMascot.vue';
+import { supabase } from './lib/supabase.js';
 
-const GAME_DURATION = 30
-const BOARD_SIZE = 16
+const GAME_DURATION = 30;
+const BOARD_SIZE = 16;
 
 // States: 'menu', 'auth', 'playing', 'leaderboard'
-const gameState = ref('menu') 
+const gameState = ref('menu');
 
-const score = ref(0)
-const timeLeft = ref(GAME_DURATION)
+const score = ref(0);
+const timeLeft = ref(GAME_DURATION);
 
-const combo = ref(0)
-const isFever = ref(false)
+const combo = ref(0);
+const isFever = ref(false);
 
-const currentName = ref('')
-const currentPin = ref('')
-const dbBestScore = ref(0)
+const currentName = ref('');
+const currentPin = ref('');
+const dbBestScore = ref(0);
 
-const countdownValue = ref(3)
-let countdownTimer = null
+const countdownValue = ref(3);
+let countdownTimer = null;
 
-const maxCombo = ref(0)
-const bombsHit = ref(0)
+const maxCombo = ref(0);
+const bombsHit = ref(0);
 
 const trackEvent = (eventName, params = {}) => {
   if (window.gtag) {
-    window.gtag('event', eventName, params)
+    window.gtag('event', eventName, params);
   }
-}
+};
 
 const identifyUser = (name) => {
   if (window.gtag) {
     // 구글 애널리틱스에 유저 ID 설정 (G-WCZJ0R9Y0P는 index.html과 동일해야 함)
     window.gtag('config', 'G-WCZJ0R9Y0P', {
-      'user_id': name
-    })
+      user_id: name,
+    });
     // 유저 속성으로 닉네임 저장
     window.gtag('set', 'user_properties', {
-      'nickname': name
-    })
+      nickname: name,
+    });
   }
-}
+};
 
 watch(gameState, (newVal) => {
-  if (newVal === 'leaderboard') trackEvent('view_leaderboard')
-  if (newVal === 'my_record') trackEvent('view_my_record')
-})
+  if (newVal === 'leaderboard') trackEvent('view_leaderboard');
+  if (newVal === 'my_record') trackEvent('view_my_record');
+});
 
 const createEmptyHole = () => ({
   id: null,
@@ -60,142 +60,160 @@ const createEmptyHole = () => ({
   isHit: false,
   floatingScore: null,
   floatingColor: null,
-  timeoutId: null
-})
+  timeoutId: null,
+});
 
-const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole))
+const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole));
 
-let gameTimer = null
-let spawnTimer = null
-let feverTimer = null
-let gameStartTime = 0
+let gameTimer = null;
+let spawnTimer = null;
+let feverTimer = null;
+let gameStartTime = 0;
 
 onMounted(() => {
   // Setup if needed
-})
+});
 
 const multiplier = computed(() => {
-  if (combo.value >= 20) return 2.0
-  if (combo.value >= 10) return 1.5
-  return 1.0
-})
+  if (combo.value >= 20) return 2.0;
+  if (combo.value >= 10) return 1.5;
+  return 1.0;
+});
 
-const authMode = ref('login')
+const authMode = ref('login');
 
 const startAuth = (mode) => {
-  authMode.value = mode
-  gameState.value = 'auth'
-  trackEvent(mode === 'register' ? 'click_register' : 'click_login')
-}
+  authMode.value = mode;
+  gameState.value = 'auth';
+  trackEvent(mode === 'register' ? 'click_register' : 'click_login');
+};
 
 const handleAuthSuccess = (userData) => {
-  currentName.value = userData.name
-  currentPin.value = userData.pin
-  dbBestScore.value = userData.score
-  gameState.value = 'menu'
-  
+  currentName.value = userData.name;
+  currentPin.value = userData.pin;
+  dbBestScore.value = userData.score;
+  gameState.value = 'menu';
+
   // Track login/auth success
-  identifyUser(userData.name)
-  trackEvent(authMode.value === 'register' ? 'sign_up_complete' : 'login_success', { method: 'pin' })
-}
+  identifyUser(userData.name);
+  trackEvent(
+    authMode.value === 'register' ? 'sign_up_complete' : 'login_success',
+    { method: 'pin' },
+  );
+};
 
 const prepareGame = () => {
   // Track game start
-  trackEvent('game_start', { method: 'button' })
-  
-  gameState.value = 'countdown'
-  countdownValue.value = 3
+  trackEvent('game_start', { method: 'button' });
+
+  gameState.value = 'countdown';
+  countdownValue.value = 3;
   countdownTimer = setInterval(() => {
-    countdownValue.value--
+    countdownValue.value--;
     if (countdownValue.value === 0) {
-      clearInterval(countdownTimer)
-      startGame()
+      clearInterval(countdownTimer);
+      startGame();
     }
-  }, 1000)
-}
+  }, 1000);
+};
 
 const quitGame = () => {
-  trackEvent('game_quit')
-  clearInterval(gameTimer)
-  clearTimeout(spawnTimer)
-  clearTimeout(feverTimer)
-  isFever.value = false
+  trackEvent('game_quit');
+  clearInterval(gameTimer);
+  clearTimeout(spawnTimer);
+  clearTimeout(feverTimer);
+  isFever.value = false;
   holes.value.forEach((hole) => {
-    if (hole && hole.timeoutId) clearTimeout(hole.timeoutId)
+    if (hole && hole.timeoutId) clearTimeout(hole.timeoutId);
     if (hole) {
-      hole.active = false
-      hole.isHit = false
+      hole.active = false;
+      hole.isHit = false;
     }
-  })
-  gameState.value = 'menu'
-}
+  });
+  gameState.value = 'menu';
+};
+
+const blockTouch = (e) => {
+  // 터치스크린(패드, 터치 노트북, 펜 등)을 통한 입력을 차단합니다.
+  if (
+    e.pointerType === 'touch' ||
+    e.pointerType === 'pen' ||
+    e.type.startsWith('touch')
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+};
 
 const startGame = () => {
-  score.value = 0
-  timeLeft.value = GAME_DURATION
-  combo.value = 0
-  maxCombo.value = 0
-  bombsHit.value = 0
-  isFever.value = false
-  gameState.value = 'playing'
-  holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole)
-  
-  gameStartTime = Date.now()
-  
-  gameTimer = setInterval(() => {
-    const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000)
-    timeLeft.value = Math.max(0, GAME_DURATION - elapsedSeconds)
-    if (timeLeft.value <= 0) {
-      endGame()
-    }
-  }, 100) // check more frequently to be precise
+  score.value = 0;
+  timeLeft.value = GAME_DURATION;
+  combo.value = 0;
+  maxCombo.value = 0;
+  bombsHit.value = 0;
+  isFever.value = false;
+  gameState.value = 'playing';
+  holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
 
-  scheduleSpawn()
-}
+  gameStartTime = Date.now();
+
+  gameTimer = setInterval(() => {
+    const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
+    timeLeft.value = Math.max(0, GAME_DURATION - elapsedSeconds);
+    if (timeLeft.value <= 0) {
+      endGame();
+    }
+  }, 100); // check more frequently to be precise
+
+  scheduleSpawn();
+};
 
 const generateSignature = async (name, score) => {
-  const salt = import.meta.env.VITE_GAME_SECRET_SALT || 'default_arcade_salt_123!'
-  const message = `${name}:${score}:${salt}`
-  const msgBuffer = new TextEncoder().encode(message)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
-  return hashHex
-}
+  const salt =
+    import.meta.env.VITE_GAME_SECRET_SALT || 'default_arcade_salt_123!';
+  const message = `${name}:${score}:${salt}`;
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return hashHex;
+};
 
 const endGame = async () => {
-  clearInterval(gameTimer)
-  clearTimeout(spawnTimer)
-  clearTimeout(feverTimer)
-  isFever.value = false
-  
+  clearInterval(gameTimer);
+  clearTimeout(spawnTimer);
+  clearTimeout(feverTimer);
+  isFever.value = false;
+
   // Clear any active entities
   holes.value.forEach((hole) => {
-    if (hole && hole.timeoutId) clearTimeout(hole.timeoutId)
+    if (hole && hole.timeoutId) clearTimeout(hole.timeoutId);
     if (hole) {
-      hole.active = false
-      hole.isHit = false
+      hole.active = false;
+      hole.isHit = false;
     }
-  })
+  });
 
   // Hard Cap check (Anti-cheat for score forgery)
   // Max possible score is around ~20k-25k realistically.
   if (score.value > 30000 || score.value < -5000) {
-    console.warn('Abnormal score detected. Skipping DB upload.')
-    gameState.value = 'leaderboard'
-    return
+    console.warn('Abnormal score detected. Skipping DB upload.');
+    gameState.value = 'leaderboard';
+    return;
   }
-  
+
   // Track game end with score
   trackEvent('game_end', {
     final_score: score.value,
     max_combo: maxCombo.value,
     bombs_hit: bombsHit.value,
-    name: currentName.value
-  })
+    name: currentName.value,
+  });
 
   // Generate Cryptographic Hash Signature
-  const signature = await generateSignature(currentName.value, score.value)
+  const signature = await generateSignature(currentName.value, score.value);
 
   // Auto-submit score to DB if it's a new best for this user
   if (score.value > dbBestScore.value) {
@@ -204,11 +222,11 @@ const endGame = async () => {
         p_name: currentName.value,
         p_pin: currentPin.value,
         p_score: score.value,
-        p_signature: signature
-      })
-      dbBestScore.value = score.value
+        p_signature: signature,
+      });
+      dbBestScore.value = score.value;
     } catch (err) {
-      console.error('Failed to update DB score', err)
+      console.error('Failed to update DB score', err);
     }
   }
 
@@ -219,187 +237,215 @@ const endGame = async () => {
         p_name: currentName.value,
         p_pin: currentPin.value,
         p_score: score.value,
-        p_signature: signature
-      })
+        p_signature: signature,
+      });
     } catch (err) {
-      console.error('Failed to save history', err)
+      console.error('Failed to save history', err);
     }
   }
 
   // Go straight to leaderboard
-  gameState.value = 'leaderboard'
-}
+  gameState.value = 'leaderboard';
+};
 
 const getSpawnDelay = () => {
-  if (isFever.value) return 375 // 0.8x of previous speed (was 300)
+  if (isFever.value) return 375; // 0.8x of previous speed (was 300)
 
-  const minDelay = 500
-  const maxDelay = 1200
-  const progress = (GAME_DURATION - timeLeft.value) / GAME_DURATION
-  return maxDelay - (maxDelay - minDelay) * progress
-}
+  const minDelay = 500;
+  const maxDelay = 1200;
+  const progress = (GAME_DURATION - timeLeft.value) / GAME_DURATION;
+  return maxDelay - (maxDelay - minDelay) * progress;
+};
 
 const getRandomType = () => {
-  if (isFever.value) return 'golden' // Only golden in fever
+  if (isFever.value) return 'golden'; // Only golden in fever
 
-  const rand = Math.random()
-  if (rand < 0.15) return 'golden'
-  if (rand < 0.35) return 'bomb'
-  return 'normal'
-}
+  const rand = Math.random();
+  if (rand < 0.15) return 'golden';
+  if (rand < 0.35) return 'bomb';
+  return 'normal';
+};
 
 const getActiveDuration = (type) => {
-  if (isFever.value) return 750 // 0.8x of previous speed (was 600)
+  if (isFever.value) return 750; // 0.8x of previous speed (was 600)
 
-  const baseDuration = getSpawnDelay() * 1.5
-  if (type === 'golden') return baseDuration * 0.8
-  if (type === 'bomb') return baseDuration * 1.2
-  return baseDuration
-}
+  const baseDuration = getSpawnDelay() * 1.5;
+  if (type === 'golden') return baseDuration * 0.8;
+  if (type === 'bomb') return baseDuration * 1.2;
+  return baseDuration;
+};
 
 const scheduleSpawn = () => {
-  if (gameState.value !== 'playing') return
+  if (gameState.value !== 'playing') return;
 
   spawnTimer = setTimeout(() => {
-    spawnEntity()
-    scheduleSpawn()
-  }, getSpawnDelay())
-}
+    spawnEntity();
+    scheduleSpawn();
+  }, getSpawnDelay());
+};
 
 const triggerFever = () => {
-  isFever.value = true
-  clearTimeout(feverTimer)
+  isFever.value = true;
+  clearTimeout(feverTimer);
   feverTimer = setTimeout(() => {
-    isFever.value = false
-  }, 5000) // 5 seconds of fever
-}
+    isFever.value = false;
+  }, 5000); // 5 seconds of fever
+};
 
 const breakCombo = () => {
-  combo.value = 0
-}
+  combo.value = 0;
+};
 
 const spawnEntity = () => {
-  if (gameState.value !== 'playing') return
+  if (gameState.value !== 'playing') return;
 
-  const emptyIndices = []
+  const emptyIndices = [];
   holes.value.forEach((hole, index) => {
-    if (!hole || (!hole.active && !hole.isHit)) emptyIndices.push(index)
-  })
+    if (!hole || (!hole.active && !hole.isHit)) emptyIndices.push(index);
+  });
 
-  if (emptyIndices.length === 0) return
+  if (emptyIndices.length === 0) return;
 
-  const randomIndex = emptyIndices[Math.floor(Math.random() * emptyIndices.length)]
-  const type = getRandomType()
-  const entityId = Date.now()
-  
-  const hole = holes.value[randomIndex]
-  if (hole && hole.timeoutId) clearTimeout(hole.timeoutId)
+  const randomIndex =
+    emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
+  const type = getRandomType();
+  const entityId = Date.now();
 
-  hole.id = entityId
-  hole.type = type
-  hole.isHit = false
-  hole.floatingScore = null
-  hole.floatingColor = null
-  hole.active = true
-  
+  const hole = holes.value[randomIndex];
+  if (hole && hole.timeoutId) clearTimeout(hole.timeoutId);
+
+  hole.id = entityId;
+  hole.type = type;
+  hole.isHit = false;
+  hole.floatingScore = null;
+  hole.floatingColor = null;
+  hole.active = true;
+
   hole.timeoutId = setTimeout(() => {
     if (hole.id === entityId) {
       // If it naturally hides and wasn't hit, and wasn't a bomb, combo breaks
       if (!hole.isHit && hole.type !== 'bomb') {
-        breakCombo()
+        breakCombo();
       }
-      hole.active = false
-      hole.isHit = false
+      hole.active = false;
+      hole.isHit = false;
     }
-  }, getActiveDuration(type))
-}
+  }, getActiveDuration(type));
+};
 
 const handleHit = (index, entity) => {
-  if (gameState.value !== 'playing' || !entity.active || entity.isHit) return
+  if (gameState.value !== 'playing' || !entity.active || entity.isHit) return;
 
-  let baseScore = 0
-  let color = '#fff'
-  
+  let baseScore = 0;
+  let color = '#fff';
+
   if (entity.type === 'normal') {
-    baseScore = 100
-    color = '#fff'
-    combo.value++
+    baseScore = 100;
+    color = '#fff';
+    combo.value++;
   } else if (entity.type === 'golden') {
-    baseScore = 300
-    color = '#ffcc80'
-    combo.value++
+    baseScore = 300;
+    color = '#ffcc80';
+    combo.value++;
   } else if (entity.type === 'bomb') {
-    baseScore = -200
-    color = '#ff3366'
-    bombsHit.value++
-    breakCombo()
+    baseScore = -200;
+    color = '#ff3366';
+    bombsHit.value++;
+    breakCombo();
   }
 
   if (combo.value > maxCombo.value) {
-    maxCombo.value = combo.value
+    maxCombo.value = combo.value;
   }
 
   // Check Fever trigger
   if (combo.value === 20 && !isFever.value) {
-    triggerFever()
+    triggerFever();
   }
 
   // Apply multiplier (bombs don't get multiplied to be fair, or maybe they do? Let's multiply penalties too)
-  const scoreChange = Math.floor(baseScore * multiplier.value)
-  score.value += scoreChange
+  const scoreChange = Math.floor(baseScore * multiplier.value);
+  score.value += scoreChange;
 
   if (holes.value[index] && holes.value[index].id === entity.id) {
-    holes.value[index].isHit = true
-    holes.value[index].floatingScore = scoreChange > 0 ? `+${scoreChange}` : `${scoreChange}`
-    holes.value[index].floatingColor = color
-    clearTimeout(holes.value[index].timeoutId)
-    
+    holes.value[index].isHit = true;
+    holes.value[index].floatingScore =
+      scoreChange > 0 ? `+${scoreChange}` : `${scoreChange}`;
+    holes.value[index].floatingColor = color;
+    clearTimeout(holes.value[index].timeoutId);
+
     setTimeout(() => {
       if (holes.value[index] && holes.value[index].id === entity.id) {
-        holes.value[index].active = false
-        holes.value[index].isHit = false
+        holes.value[index].active = false;
+        holes.value[index].isHit = false;
       }
-    }, 400)
+    }, 400);
   }
-}
+};
 
 onUnmounted(() => {
-  clearInterval(countdownTimer)
-  clearInterval(gameTimer)
-  clearTimeout(spawnTimer)
-  clearTimeout(feverTimer)
-})
+  clearInterval(countdownTimer);
+  clearInterval(gameTimer);
+  clearTimeout(spawnTimer);
+  clearTimeout(feverTimer);
+});
 </script>
 
 <template>
   <div class="app-wrapper" :class="{ 'fever-active': isFever }">
     <div class="game-container">
-      
       <!-- Top Info Bar -->
       <div class="top-info" v-if="currentName">
         <div class="personal-best">TOP: {{ dbBestScore }}</div>
-        <button v-if="gameState === 'playing'" @click="quitGame" class="quit-btn">포기하기</button>
+        <button
+          v-if="gameState === 'playing'"
+          @click="quitGame"
+          class="quit-btn"
+        >
+          포기하기
+        </button>
       </div>
 
       <header class="game-header">
         <div class="score-container">
-          <div class="huge-score" :class="{'negative': score < 0}">{{ score }}</div>
-          <div class="timer-badge" :class="{ 'warning': timeLeft <= 5 && gameState === 'playing' }">TIME: {{ timeLeft }}s</div>
+          <div class="huge-score" :class="{ negative: score < 0 }">
+            {{ score }}
+          </div>
+          <div
+            class="timer-badge"
+            :class="{ warning: timeLeft <= 5 && gameState === 'playing' }"
+          >
+            TIME: {{ timeLeft }}s
+          </div>
         </div>
       </header>
 
       <!-- Combo Overlay (Absolute positioned to top right) -->
-      <div v-if="combo > 1 && gameState === 'playing'" class="combo-overlay" :key="combo">
-        <div class="huge-combo" :class="{'combo-high': combo >= 10, 'combo-fever': combo >= 20}">
+      <div
+        v-if="combo > 1 && gameState === 'playing'"
+        class="combo-overlay"
+        :key="combo"
+      >
+        <div
+          class="huge-combo"
+          :class="{ 'combo-high': combo >= 10, 'combo-fever': combo >= 20 }"
+        >
           {{ combo }} COMBO!
-          <span v-if="multiplier > 1" class="multiplier">x{{ multiplier }}</span>
+          <span v-if="multiplier > 1" class="multiplier"
+            >x{{ multiplier }}</span
+          >
         </div>
       </div>
 
       <div class="board-wrapper">
-        <div class="grid">
-          <Hole 
-            v-for="(entity, index) in holes" 
+        <div
+          class="grid"
+          @touchstart.capture="blockTouch"
+          @touchend.capture="blockTouch"
+          @pointerdown.capture="blockTouch"
+        >
+          <Hole
+            v-for="(entity, index) in holes"
             :key="index"
             :entity="entity"
             @hit="handleHit(index, entity)"
@@ -410,37 +456,76 @@ onUnmounted(() => {
         <div v-if="gameState === 'menu'" class="overlay menu-overlay">
           <div class="crt-lines"></div>
           <div class="particles-bg"></div>
-          
+
           <PixelMascot />
-          
+
           <h1 class="main-title">두더지 게임</h1>
           <p class="subtitle">네오 아케이드 에디션</p>
-          
+
           <div class="legend" v-if="currentName">
             <div class="legend-item welcome-msg">
               반가워요, <span class="player-name">{{ currentName }}</span> 님!
             </div>
           </div>
           <div class="legend" v-else>
-            <div class="legend-item"><span style="color: #795548;">■</span> Normal (+100)</div>
-            <div class="legend-item"><span style="color: #ffb300;">■</span> Golden (+300)</div>
-            <div class="legend-item"><span style="color: #212121;">■</span> Bomb (-200)</div>
+            <div class="legend-item">
+              <span style="color: #795548">■</span> Normal (+100)
+            </div>
+            <div class="legend-item">
+              <span style="color: #ffb300">■</span> Golden (+300)
+            </div>
+            <div class="legend-item">
+              <span style="color: #212121">■</span> Bomb (-200)
+            </div>
             <div class="legend-item mt-small">⚡ 20 Combo = FEVER MODE!</div>
           </div>
           <div class="buttons-row">
             <template v-if="!currentName">
-              <button @click="startAuth('login')" class="action-btn neon-btn">로그인</button>
-              <button @click="startAuth('register')" class="action-btn neon-btn">회원가입</button>
+              <button @click="startAuth('login')" class="action-btn neon-btn">
+                로그인
+              </button>
+              <button
+                @click="startAuth('register')"
+                class="action-btn neon-btn"
+              >
+                회원가입
+              </button>
             </template>
-            <button v-else @click="prepareGame" class="action-btn neon-btn">게임 시작</button>
-            <button @click="gameState = 'leaderboard'" class="action-btn neon-btn">랭킹</button>
-            <button v-if="currentName" @click="gameState = 'my_record'" class="action-btn neon-btn">내 기록</button>
-            <button v-if="currentName" @click="currentName = ''; identifyUser(null)" class="action-btn neon-btn">로그아웃</button>
+            <button v-else @click="prepareGame" class="action-btn neon-btn">
+              게임 시작
+            </button>
+            <button
+              @click="gameState = 'leaderboard'"
+              class="action-btn neon-btn"
+            >
+              랭킹
+            </button>
+            <button
+              v-if="currentName"
+              @click="gameState = 'my_record'"
+              class="action-btn neon-btn"
+            >
+              내 기록
+            </button>
+            <button
+              v-if="currentName"
+              @click="
+                currentName = '';
+                identifyUser(null);
+              "
+              class="action-btn neon-btn"
+            >
+              로그아웃
+            </button>
           </div>
         </div>
 
         <div v-if="gameState === 'auth'" class="overlay">
-          <AuthModal :mode="authMode" @close="gameState = 'menu'" @auth-success="handleAuthSuccess" />
+          <AuthModal
+            :mode="authMode"
+            @close="gameState = 'menu'"
+            @auth-success="handleAuthSuccess"
+          />
         </div>
 
         <div v-if="gameState === 'countdown'" class="overlay">
@@ -448,13 +533,16 @@ onUnmounted(() => {
         </div>
 
         <div v-if="gameState === 'leaderboard'" class="overlay">
-          <Leaderboard :current-score="score" :current-name="currentName" @close="gameState = 'menu'" />
+          <Leaderboard
+            :current-score="score"
+            :current-name="currentName"
+            @close="gameState = 'menu'"
+          />
         </div>
 
         <div v-if="gameState === 'my_record'" class="overlay">
           <MyRecord :currentName="currentName" @close="gameState = 'menu'" />
         </div>
-
       </div>
     </div>
   </div>
@@ -476,8 +564,12 @@ onUnmounted(() => {
 }
 
 @keyframes feverPulse {
-  0% { background-color: rgba(255, 0, 100, 0.1); }
-  100% { background-color: rgba(0, 200, 255, 0.1); }
+  0% {
+    background-color: rgba(255, 0, 100, 0.1);
+  }
+  100% {
+    background-color: rgba(0, 200, 255, 0.1);
+  }
 }
 
 .game-container {
@@ -541,14 +633,20 @@ onUnmounted(() => {
 .huge-score {
   font-size: 5rem;
   color: #00ffcc;
-  text-shadow: 0 0 20px #00ffcc, 0 0 40px rgba(0, 255, 204, 0.5);
+  text-shadow:
+    0 0 20px #00ffcc,
+    0 0 40px rgba(0, 255, 204, 0.5);
   line-height: 1;
-  transition: color 0.3s, text-shadow 0.3s;
+  transition:
+    color 0.3s,
+    text-shadow 0.3s;
 }
 
 .huge-score.negative {
   color: #ff3366;
-  text-shadow: 0 0 20px #ff3366, 0 0 40px rgba(255, 51, 102, 0.5);
+  text-shadow:
+    0 0 20px #ff3366,
+    0 0 40px rgba(255, 51, 102, 0.5);
 }
 
 .timer-badge {
@@ -577,22 +675,31 @@ onUnmounted(() => {
 .huge-combo {
   font-size: 4rem;
   color: #ff00de;
-  text-shadow: 0 0 20px #ff00de, 0 0 40px #ff00de;
+  text-shadow:
+    0 0 20px #ff00de,
+    0 0 40px #ff00de;
   white-space: nowrap;
   animation: popBounce 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 .combo-high {
   color: #ffeb3b;
-  text-shadow: 0 0 20px #ffeb3b, 0 0 40px #ffeb3b;
+  text-shadow:
+    0 0 20px #ffeb3b,
+    0 0 40px #ffeb3b;
   font-size: 5rem;
 }
 
 .combo-fever {
   color: #ff0000;
-  text-shadow: 0 0 20px #ff0000, 0 0 40px #ff0000, 0 0 60px #ff0000;
+  text-shadow:
+    0 0 20px #ff0000,
+    0 0 40px #ff0000,
+    0 0 60px #ff0000;
   font-size: 6rem;
-  animation: popBounce 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275), shake 0.2s infinite;
+  animation:
+    popBounce 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    shake 0.2s infinite;
 }
 
 .multiplier {
@@ -603,15 +710,30 @@ onUnmounted(() => {
 }
 
 @keyframes popBounce {
-  0% { transform: scale(0.5) translateY(50px); opacity: 0; }
-  50% { transform: scale(1.2) translateY(-20px); opacity: 1; }
-  100% { transform: scale(1) translateY(0); opacity: 1; }
+  0% {
+    transform: scale(0.5) translateY(50px);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2) translateY(-20px);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
 }
 
 @keyframes pulse {
-  0% { opacity: 1; }
-  50% { opacity: 0.5; }
-  100% { opacity: 1; }
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 .board-wrapper {
@@ -667,9 +789,18 @@ onUnmounted(() => {
 }
 
 @keyframes pop {
-  0% { transform: scale(0.5); opacity: 0; }
-  50% { transform: scale(1.2); opacity: 1; }
-  100% { transform: scale(1); opacity: 0; }
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
 }
 
 .crt-lines {
@@ -678,9 +809,17 @@ onUnmounted(() => {
   left: 0;
   width: 100%;
   height: 100%;
-  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
-              linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
-  background-size: 100% 3px, 3px 100%;
+  background:
+    linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%),
+    linear-gradient(
+      90deg,
+      rgba(255, 0, 0, 0.03),
+      rgba(0, 255, 0, 0.01),
+      rgba(0, 0, 255, 0.03)
+    );
+  background-size:
+    100% 3px,
+    3px 100%;
   pointer-events: none;
   z-index: 10;
 }
@@ -689,13 +828,13 @@ onUnmounted(() => {
   position: absolute;
   width: 100%;
   height: 100%;
-  background-image: 
-    radial-gradient(1px 1px at 20px 30px, #fff, rgba(0,0,0,0)),
-    radial-gradient(1px 1px at 40px 70px, #fff, rgba(0,0,0,0)),
-    radial-gradient(1px 1px at 50px 160px, #fff, rgba(0,0,0,0)),
-    radial-gradient(1px 1px at 80px 120px, #fff, rgba(0,0,0,0)),
-    radial-gradient(1px 1px at 110px 10px, #fff, rgba(0,0,0,0)),
-    radial-gradient(1px 1px at 150px 150px, #fff, rgba(0,0,0,0));
+  background-image:
+    radial-gradient(1px 1px at 20px 30px, #fff, rgba(0, 0, 0, 0)),
+    radial-gradient(1px 1px at 40px 70px, #fff, rgba(0, 0, 0, 0)),
+    radial-gradient(1px 1px at 50px 160px, #fff, rgba(0, 0, 0, 0)),
+    radial-gradient(1px 1px at 80px 120px, #fff, rgba(0, 0, 0, 0)),
+    radial-gradient(1px 1px at 110px 10px, #fff, rgba(0, 0, 0, 0)),
+    radial-gradient(1px 1px at 150px 150px, #fff, rgba(0, 0, 0, 0));
   background-repeat: repeat;
   background-size: 200px 200px;
   animation: bgScroll 20s linear infinite;
@@ -704,8 +843,12 @@ onUnmounted(() => {
 }
 
 @keyframes bgScroll {
-  from { background-position: 0 0; }
-  to { background-position: 0 200px; }
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 200px;
+  }
 }
 
 .main-title {
@@ -731,8 +874,6 @@ onUnmounted(() => {
   font-weight: bold;
 }
 
-
-
 .subtitle {
   color: #fff;
   margin-bottom: 30px;
@@ -746,7 +887,7 @@ onUnmounted(() => {
   gap: 10px;
   margin-bottom: 30px;
   text-align: left;
-  background-color: rgba(0,0,0,0.5);
+  background-color: rgba(0, 0, 0, 0.5);
   padding: 15px 25px;
   border-radius: 8px;
   border: 2px solid var(--hole-color);
@@ -787,8 +928,15 @@ onUnmounted(() => {
 }
 
 @keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-2px) rotate(-2deg); }
-  75% { transform: translateX(2px) rotate(2deg); }
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-2px) rotate(-2deg);
+  }
+  75% {
+    transform: translateX(2px) rotate(2deg);
+  }
 }
 </style>
