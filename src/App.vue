@@ -97,9 +97,22 @@ const honeypotEntity = ref({
   spawnTime: Date.now(),
 });
 
+function enforceAntiCheat() {
+  // 게임 중일 때만 검사하여 조건 도달 시 즉시 포기 처리
+  if (gameState.value !== 'playing') return;
+  if (suspiciousClicks >= 5 || score.value > 30000 || score.value < -5000) {
+    alert('잡았다요놈');
+    console.warn(
+      'Abnormal gameplay detected (Macro/Bot). Game forced to quit.',
+    );
+    quitGame();
+  }
+}
+
 const catchMacro = () => {
   suspiciousClicks += 5; // 단 한 번이라도 치면 즉시 섀도우 밴 기준치 초과!
   console.warn('[매크로 적발] 인간은 볼 수 없는 투명 허니팟 타격 감지!');
+  enforceAntiCheat();
 };
 
 const catchUntrustedEvent = (e) => {
@@ -107,6 +120,7 @@ const catchUntrustedEvent = (e) => {
   if (!e.isTrusted) {
     suspiciousClicks += 5; // 즉시 섀도우 밴 기준치 초과
     console.warn('[매크로 적발] 개발자 도구 스크립트(가짜 클릭) 감지!');
+    enforceAntiCheat();
   }
 };
 
@@ -427,6 +441,7 @@ const handleHit = (index, entity) => {
     console.warn(
       `[매크로 의심] 비인간적인 반응 속도 감지 (${reactionTime}ms).`,
     );
+    enforceAntiCheat();
     return; // 타격 판정을 무시합니다.
   }
 
@@ -460,6 +475,8 @@ const handleHit = (index, entity) => {
   // Apply multiplier (bombs don't get multiplied to be fair, or maybe they do? Let's multiply penalties too)
   const scoreChange = Math.floor(baseScore * multiplier.value);
   score.value += scoreChange;
+
+  enforceAntiCheat(); // 점수가 너무 높아졌는지 실시간 검사
 
   if (holes.value[index] && holes.value[index].id === entity.id) {
     holes.value[index].isHit = true;
