@@ -303,13 +303,17 @@ const getActiveDuration = (type) => {
   return baseDuration;
 };
 
-const scheduleSpawn = () => {
+const scheduleSpawn = (customDelay = null) => {
   if (gameState.value !== 'playing') return;
 
+  const delay = customDelay !== null ? customDelay : getSpawnDelay();
+
   spawnTimer = setTimeout(() => {
-    spawnEntity();
-    scheduleSpawn();
-  }, getSpawnDelay());
+    const type = spawnEntity();
+    // 폭탄이 나왔을 경우, 플레이어가 지루하게 기다리지 않도록 다음 스폰 대기 시간을 40%로 단축시킵니다.
+    const nextDelay = type === 'bomb' ? getSpawnDelay() * 0.4 : null;
+    scheduleSpawn(nextDelay);
+  }, delay);
 };
 
 const triggerFever = () => {
@@ -325,14 +329,14 @@ const breakCombo = () => {
 };
 
 const spawnEntity = () => {
-  if (gameState.value !== 'playing') return;
+  if (gameState.value !== 'playing') return null;
 
   const emptyIndices = [];
   holes.value.forEach((hole, index) => {
     if (!hole || (!hole.active && !hole.isHit)) emptyIndices.push(index);
   });
 
-  if (emptyIndices.length === 0) return;
+  if (emptyIndices.length === 0) return null;
 
   const randomIndex =
     emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
@@ -359,6 +363,8 @@ const spawnEntity = () => {
       hole.isHit = false;
     }
   }, getActiveDuration(type));
+
+  return type;
 };
 
 const handleHit = (index, entity) => {
@@ -407,8 +413,9 @@ const handleHit = (index, entity) => {
 
     // 두더지를 성공적으로 잡은 경우 즉시 다음 두더지 스폰
     clearTimeout(spawnTimer);
-    spawnEntity();
-    scheduleSpawn();
+    const newType = spawnEntity();
+    const nextDelay = newType === 'bomb' ? getSpawnDelay() * 0.4 : null;
+    scheduleSpawn(nextDelay);
 
     setTimeout(() => {
       if (holes.value[index] && holes.value[index].id === entity.id) {
