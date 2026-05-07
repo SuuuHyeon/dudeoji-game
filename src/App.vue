@@ -118,8 +118,9 @@ function enforceAntiCheat() {
       reactionTimes.length;
     const stdDev = Math.sqrt(variance);
 
-    // 반응속도 표준편차가 너무 낮으면 기계로 간주 (리듬게임 고수도 10ms 이하는 어려움. 기준 완화)
-    if (stdDev < 10) {
+    // 컴퓨터의 화면 캡처 딜레이 + 매크로의 6ms 난수를 고려해도 표준편차는 25ms를 넘기 힘듭니다.
+    // 사람은 최소 30ms 이상의 불규칙한 오차가 발생하므로 기준을 25ms 미만으로 상향하여 봇을 완벽히 차단합니다.
+    if (stdDev < 25) {
       suspiciousClicks += 5; // 즉시 밴
       reactionTimes = []; // 배열을 초기화하여 중복 적발을 방지합니다.
     }
@@ -526,7 +527,8 @@ const handleHit = (index, entity) => {
       if (!lastInputIsTouch && clickHistory.length >= 2) {
         const lastClick = clickHistory[clickHistory.length - 2];
         if (lastClick.index !== index) {
-          if (mouseMoveEventCount <= 1) {
+          // 사람은 마우스로 다른 구멍까지 이동할 때 최소 5번 이상의 move 궤적이 남습니다. 5번 미만이면 매크로의 순간이동(Teleport)입니다.
+          if (mouseMoveEventCount < 5) {
             teleportCount++;
             if (teleportCount >= 2) {
               // 연속 2회 순간이동 시 파이썬 매크로 확정
@@ -548,23 +550,19 @@ const handleHit = (index, entity) => {
         const allX = clickHistory.map((c) => c.relX);
         const allY = clickHistory.map((c) => c.relY);
 
+        // NaN이 발생하던 치명적인 오타(Math.pow의 두 번째 인자 누락)를 수정하고 정상적으로 평균과 편차를 구합니다.
+        const meanX = allX.reduce((a, b) => a + b, 0) / allX.length;
+        const meanY = allY.reduce((a, b) => a + b, 0) / allY.length;
         const stdDevX = Math.sqrt(
-          allX.reduce(
-            (a, b) =>
-              a + Math.pow(b - allX.reduce((a, b) => a + b, 0) / allX.length),
-            0,
-          ) / allX.length,
+          allX.reduce((a, b) => a + Math.pow(b - meanX, 2), 0) / allX.length,
         );
         const stdDevY = Math.sqrt(
-          allY.reduce(
-            (a, b) =>
-              a + Math.pow(b - allY.reduce((a, b) => a + b, 0) / allY.length),
-            0,
-          ) / allY.length,
+          allY.reduce((a, b) => a + Math.pow(b - meanY, 2), 0) / allY.length,
         );
 
-        // 다른 구멍들을 쳤는데 클릭 오차율이 1.5% 미만이라면 100% 매크로 코드입니다.
-        if (stdDevX < 0.015 && stdDevY < 0.015) {
+        // 매크로가 ±1 픽셀의 오차를 줘도 구멍 크기 대비 표준편차는 2% 이내입니다. 사람은 10% 이상 벌어집니다.
+        // 5% 미만의 정밀함을 보이면 기계로 차단합니다.
+        if (stdDevX < 0.05 && stdDevY < 0.05) {
           suspiciousClicks += 5;
           enforceAntiCheat();
           return;
