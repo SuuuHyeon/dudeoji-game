@@ -89,6 +89,9 @@ let suspiciousClicks = 0;
 let clickTimestamps = []; // 마우스 광클 방지를 위한 클릭 시간 기록 배열
 let reactionTimes = []; // 매크로의 일정한 반응속도 패턴을 잡기 위한 배열
 let lastClickEvent = null; // Vue Devtools 등을 통한 직접 함수 호출 방지용
+let clickHistory = []; // { index, relX, relY } 기록 (물리적 좌표 일관성 패턴 분석용)
+let mouseMoveEventCount = 0; // 커서 이동 궤적 없는 순간이동 감지용
+let teleportCount = 0; // 연속 순간이동 스택
 
 // DOM 탐색 매크로를 유인하는 '투명 허니팟(가짜 두더지)' 데이터
 const honeypotEntity = ref({
@@ -181,6 +184,13 @@ let consecutiveBombs = 0;
 
 onMounted(() => {
   fetchPatchNotes();
+  window.addEventListener(
+    'mousemove',
+    () => {
+      mouseMoveEventCount++;
+    },
+    { capture: true },
+  );
   window.addEventListener('click', catchUntrustedEvent, { capture: true });
   window.addEventListener('mousedown', catchUntrustedEvent, { capture: true });
   window.addEventListener('pointerdown', trackInputTypePointer, {
@@ -188,6 +198,26 @@ onMounted(() => {
   });
   window.addEventListener('touchstart', trackInputTypeTouch, { capture: true });
   // Setup if needed
+
+  // 배포 환경에서 기본적인 우클릭 및 개발자 도구 단축키 차단 (우회는 가능하지만 매우 귀찮게 만듦)
+  if (!import.meta.env.DEV) {
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
+    window.addEventListener('keydown', (e) => {
+      if (
+        e.key === 'F12' || // F12
+        (e.ctrlKey &&
+          e.shiftKey &&
+          (e.key === 'I' || e.key === 'J' || e.key === 'C')) || // Windows: Ctrl+Shift+I/J/C
+        (e.ctrlKey && e.key === 'U') || // Windows: Ctrl+U (소스보기)
+        (e.metaKey &&
+          e.altKey &&
+          (e.key === 'I' || e.key === 'J' || e.key === 'C')) || // Mac: Cmd+Option+I/J/C
+        (e.metaKey && e.shiftKey && e.key === 'C') // Mac: Cmd+Shift+C
+      ) {
+        e.preventDefault();
+      }
+    });
+  }
 });
 
 const multiplier = computed(() => {
@@ -235,6 +265,9 @@ const prepareGame = () => {
 
 const quitGame = () => {
   trackEvent('game_quit');
+  clickHistory = [];
+  mouseMoveEventCount = 0;
+  teleportCount = 0;
   clearInterval(gameTimer);
   clearTimeout(spawnTimer);
   clearTimeout(feverTimer);
@@ -260,6 +293,9 @@ const startGame = () => {
   suspiciousClicks = 0;
   clickTimestamps = [];
   reactionTimes = [];
+  clickHistory = [];
+  mouseMoveEventCount = 0;
+  teleportCount = 0;
   lastClickEvent = null;
   gameState.value = 'playing';
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
@@ -472,6 +508,69 @@ const handleHit = (index, entity) => {
     suspiciousClicks += 5;
     enforceAntiCheat();
     return;
+  }
+
+  // 2. 파이썬 OS 레벨 매크로 완벽 방어: 좌표 일관성 분석 및 순간이동 감지
+  const holeEl = holeElements.value[index]?.$el;
+  if (holeEl && lastClickEvent) {
+    const rect = holeEl.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      const relX = (lastClickEvent.x - rect.left) / rect.width;
+      const relY = (lastClickEvent.y - rect.top) / rect.height;
+
+      clickHistory.push({ index, relX, relY });
+      if (clickHistory.length > 10) clickHistory.shift();
+
+      // [방어 A] 궤적 없는 순간이동(Teleport) 감지
+      // OS API로 커서를 순간이동 시키면 다른 구멍을 쳤음에도 중간에 mousemove 궤적이 1번 이하로 잡힙니다.
+      if (!lastInputIsTouch && clickHistory.length >= 2) {
+        const lastClick = clickHistory[clickHistory.length - 2];
+        if (lastClick.index !== index) {
+          if (mouseMoveEventCount <= 1) {
+            teleportCount++;
+            if (teleportCount >= 2) {
+              // 연속 2회 순간이동 시 파이썬 매크로 확정
+              suspiciousClicks += 5;
+              enforceAntiCheat();
+              return;
+            }
+          } else {
+            teleportCount = 0; // 정상적으로 마우스를 끌어서 쳤다면 스택 초기화
+          }
+        }
+      }
+      mouseMoveEventCount = 0; // 이동 기록 초기화
+
+      // [방어 B] 기계적인 클릭 좌표 일관성 검사
+      // 봇은 화면을 분할해 항상 구멍의 같은 수학적 좌표 비율(예: X: 50%, Y: 65%)을 누릅니다.
+      const uniqueHoles = new Set(clickHistory.map((c) => c.index));
+      if (uniqueHoles.size >= 3) {
+        const allX = clickHistory.map((c) => c.relX);
+        const allY = clickHistory.map((c) => c.relY);
+
+        const stdDevX = Math.sqrt(
+          allX.reduce(
+            (a, b) =>
+              a + Math.pow(b - allX.reduce((a, b) => a + b, 0) / allX.length),
+            0,
+          ) / allX.length,
+        );
+        const stdDevY = Math.sqrt(
+          allY.reduce(
+            (a, b) =>
+              a + Math.pow(b - allY.reduce((a, b) => a + b, 0) / allY.length),
+            0,
+          ) / allY.length,
+        );
+
+        // 다른 구멍들을 쳤는데 클릭 오차율이 1.5% 미만이라면 100% 매크로 코드입니다.
+        if (stdDevX < 0.015 && stdDevY < 0.015) {
+          suspiciousClicks += 5;
+          enforceAntiCheat();
+          return;
+        }
+      }
+    }
   }
 
   // 매크로 방지: 반응 속도(Reaction Time) 검사
