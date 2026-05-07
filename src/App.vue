@@ -88,7 +88,6 @@ const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole));
 let suspiciousClicks = 0;
 let clickTimestamps = []; // 마우스 광클 방지를 위한 클릭 시간 기록 배열
 let reactionTimes = []; // 매크로의 일정한 반응속도 패턴을 잡기 위한 배열
-const clickPositions = ref(Array.from({ length: BOARD_SIZE }, () => [])); // 홀별 클릭 좌표 기록
 let lastClickEvent = null; // Vue Devtools 등을 통한 직접 함수 호출 방지용
 
 // DOM 탐색 매크로를 유인하는 '투명 허니팟(가짜 두더지)' 데이터
@@ -116,44 +115,10 @@ function enforceAntiCheat() {
       reactionTimes.length;
     const stdDev = Math.sqrt(variance);
 
-    // 반응속도 표준편차가 20ms 미만이면 기계(매크로)로 간주
-    if (stdDev < 20) {
+    // 반응속도 표준편차가 너무 낮으면 기계로 간주 (리듬게임 고수도 10ms 이하는 어려움. 기준 완화)
+    if (stdDev < 10) {
       suspiciousClicks += 5; // 즉시 밴
-    }
-  }
-
-  // 2. 클릭 좌표 일관성 분석 (인간은 매번 정확히 같은 픽셀을 누를 수 없음)
-  for (const positions of clickPositions.value) {
-    // 최근 5번의 클릭 기록이 쌓였을 때 검사
-    if (positions.length < 5) continue;
-
-    const allX = positions.map((p) => p.x);
-    const allY = positions.map((p) => p.y);
-
-    const meanX = allX.reduce((a, b) => a + b, 0) / allX.length;
-    const varianceX =
-      allX.reduce((a, b) => a + Math.pow(b - meanX, 2), 0) / allX.length;
-    const stdDevX = Math.sqrt(varianceX);
-
-    const meanY = allY.reduce((a, b) => a + b, 0) / allY.length;
-    const varianceY =
-      allY.reduce((a, b) => a + Math.pow(b - meanY, 2), 0) / allY.length;
-    const stdDevY = Math.sqrt(varianceY);
-
-    // 5번 연속 클릭의 X, Y 좌표 표준편차가 모두 1px 미만이면 봇으로 간주
-    if (stdDevX < 1 && stdDevY < 1) {
-      suspiciousClicks += 5; // 즉시 밴
-      break; // 한 번만 적발해도 충분
-    }
-  }
-
-  // 3. 최소 반응 속도 분석 (봇은 안전을 위해 특정 시간 이하로 절대 클릭하지 않음)
-  if (reactionTimes.length >= 15) {
-    const minReactionTime = Math.min(...reactionTimes);
-    // 최근 15번의 클릭 중 가장 빠른 반응이 280ms보다 느리다면 비정상
-    // 사람은 아무리 느려도 한두 번은 280ms 안쪽으로 반응하게 됨
-    if (minReactionTime > 280) {
-      suspiciousClicks += 2; // 의심 스택 추가
+      reactionTimes = []; // 배열을 초기화하여 중복 적발을 방지합니다.
     }
   }
 
@@ -296,7 +261,6 @@ const startGame = () => {
   clickTimestamps = [];
   reactionTimes = [];
   lastClickEvent = null;
-  clickPositions.value = Array.from({ length: BOARD_SIZE }, () => []);
   gameState.value = 'playing';
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
 
@@ -503,30 +467,11 @@ const handleHit = (index, entity) => {
   if (gameState.value !== 'playing' || !entity.active || entity.isHit) return;
 
   // 1. 함수 직접 호출(Vue Devtools 등) 방어
-  // 진짜 클릭 이벤트가 발생한 지 100ms 이내가 아니라면, 스크립트로 handleHit만 강제 호출한 것임
-  if (!lastClickEvent || Date.now() - lastClickEvent.time > 100) {
+  // 브라우저 렌더링 지연(Lag)을 고려하여 시간차 허용 범위를 100ms -> 500ms로 넉넉하게 변경
+  if (!lastClickEvent || Date.now() - lastClickEvent.time > 500) {
     suspiciousClicks += 5;
     enforceAntiCheat();
     return;
-  }
-
-  // 클릭 좌표 분석을 위한 데이터 수집
-  const holeEl = holeElements.value[index]?.$el;
-  if (holeEl && lastClickEvent) {
-    const rect = holeEl.getBoundingClientRect();
-    // 홀 내부의 상대 좌표 계산
-    const clickCoord = {
-      x: lastClickEvent.x - rect.left,
-      y: lastClickEvent.y - rect.top,
-    };
-
-    // 해당 홀의 클릭 좌표 기록
-    const holeSpecificPositions = clickPositions.value[index];
-    holeSpecificPositions.push(clickCoord);
-    // 최근 5개의 기록만 유지
-    if (holeSpecificPositions.length > 5) {
-      holeSpecificPositions.shift();
-    }
   }
 
   // 매크로 방지: 반응 속도(Reaction Time) 검사
