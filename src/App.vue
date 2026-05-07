@@ -29,11 +29,22 @@ let countdownTimer = null;
 const maxCombo = ref(0);
 const bombsHit = ref(0);
 
-const patchNotes = ref([
-  '연속 폭탄 출현 2회 제한',
-  '모바일/패드 터치 타격 방지',
-  '두더지잡기 게임이랍니다',
-]);
+const patchNotes = ref([]);
+
+const fetchPatchNotes = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('patch_notes')
+      .select('content')
+      .order('id', { ascending: false })
+      .limit(5); // 최근 5개까지만 가져옵니다
+
+    if (error) throw error;
+    if (data) patchNotes.value = data.map((item) => item.content);
+  } catch (err) {
+    console.error('Failed to fetch patch notes', err);
+  }
+};
 
 const trackEvent = (eventName, params = {}) => {
   if (window.gtag) {
@@ -92,6 +103,7 @@ let gameStartTime = 0;
 let consecutiveBombs = 0;
 
 onMounted(() => {
+  fetchPatchNotes();
   window.addEventListener('pointerdown', trackInputTypePointer, {
     capture: true,
   });
