@@ -5,6 +5,7 @@ import AuthModal from './components/AuthModal.vue';
 import Leaderboard from './components/Leaderboard.vue';
 import MyRecord from './components/MyRecord.vue';
 import PixelMascot from './components/PixelMascot.vue';
+import AntiCheatModal from './components/AntiCheatModal.vue';
 import { supabase } from './lib/supabase.js';
 
 const GAME_DURATION = 30;
@@ -12,6 +13,8 @@ const BOARD_SIZE = 16;
 
 // States: 'menu', 'auth', 'playing', 'leaderboard'
 const gameState = ref('menu');
+
+const showAntiCheatModal = ref(false); // 매크로 적발 모달 표시 상태
 
 const score = ref(0);
 const timeLeft = ref(GAME_DURATION);
@@ -41,9 +44,7 @@ const fetchPatchNotes = async () => {
 
     if (error) throw error;
     if (data) patchNotes.value = data.map((item) => item.content);
-  } catch (err) {
-    console.error('Failed to fetch patch notes', err);
-  }
+  } catch (err) {}
 };
 
 const trackEvent = (eventName, params = {}) => {
@@ -115,28 +116,19 @@ function enforceAntiCheat() {
 
     // 반응속도 표준편차가 20ms 미만이면 기계(매크로)로 간주
     if (stdDev < 20) {
-      console.warn(
-        `[매크로 적발] 기계적인 반응속도 일관성 감지 (표준편차: ${stdDev.toFixed(2)}ms)`,
-      );
       suspiciousClicks += 5; // 즉시 밴
     }
   }
 
   if (suspiciousClicks >= 5 || score.value > 30000 || score.value < -5000) {
-    console.warn(
-      'Abnormal gameplay detected (Macro/Bot). Game forced to quit.',
-    );
     // 화면을 메인 메뉴로 먼저 전환하여 렌더링 락(Lock)을 방지합니다.
     quitGame();
-    setTimeout(() => {
-      alert('잡았다요놈');
-    }, 50);
+    showAntiCheatModal.value = true;
   }
 }
 
 const catchMacro = () => {
   suspiciousClicks += 5; // 단 한 번이라도 치면 즉시 섀도우 밴 기준치 초과!
-  console.warn('[매크로 적발] 인간은 볼 수 없는 투명 허니팟 타격 감지!');
   enforceAntiCheat();
 };
 
@@ -147,7 +139,6 @@ const catchUntrustedEvent = (e) => {
   // 브라우저 네이티브 보안: 자바스크립트로 강제 발생시킨 가짜 클릭은 isTrusted가 false입니다.
   if (!e.isTrusted) {
     suspiciousClicks += 5; // 즉시 섀도우 밴 기준치 초과
-    console.warn('[매크로 적발] 개발자 도구 스크립트(가짜 클릭) 감지!');
     enforceAntiCheat();
   }
 };
@@ -170,7 +161,6 @@ const trackInputTypePointer = (e) => {
 
       if (clickTimestamps.length >= 8) {
         suspiciousClicks += 5; // 즉시 섀도우 밴 기준치 초과!
-        console.warn('[매크로 적발] 비정상적인 광클(Auto-Clicker) 감지!');
         enforceAntiCheat();
       }
     }
@@ -316,12 +306,9 @@ const endGame = async () => {
   // Hard Cap check (Anti-cheat for score forgery)
   // Max possible score is around ~20k-25k realistically.
   if (score.value > 30000 || score.value < -5000 || suspiciousClicks >= 5) {
-    console.warn('Abnormal gameplay detected (Macro/Bot). Skipping DB upload.');
     // 화면을 리더보드/메뉴로 먼저 전환
     gameState.value = 'menu';
-    setTimeout(() => {
-      alert('잡았다요놈');
-    }, 50);
+    showAntiCheatModal.value = true;
     return;
   }
 
@@ -346,9 +333,7 @@ const endGame = async () => {
         p_signature: signature,
       });
       dbBestScore.value = score.value;
-    } catch (err) {
-      console.error('Failed to update DB score', err);
-    }
+    } catch (err) {}
   }
 
   // Always append to history
@@ -360,9 +345,7 @@ const endGame = async () => {
         p_score: score.value,
         p_signature: signature,
       });
-    } catch (err) {
-      console.error('Failed to save history', err);
-    }
+    } catch (err) {}
   }
 
   // Go straight to leaderboard
@@ -485,7 +468,6 @@ const handleHit = (index, entity) => {
   // 진짜 클릭 이벤트가 발생한 지 100ms 이내가 아니라면, 스크립트로 handleHit만 강제 호출한 것임
   if (!lastClickEvent || Date.now() - lastClickEvent.time > 100) {
     suspiciousClicks += 5;
-    console.warn('[매크로 적발] 이벤트 없는 비정상 함수 직접 호출 감지!');
     enforceAntiCheat();
     return;
   }
@@ -495,9 +477,6 @@ const handleHit = (index, entity) => {
   const reactionTime = Date.now() - entity.spawnTime;
   if (reactionTime < 160) {
     suspiciousClicks++;
-    console.warn(
-      `[매크로 의심] 비인간적인 반응 속도 감지 (${reactionTime}ms).`,
-    );
     enforceAntiCheat();
     return; // 타격 판정을 무시합니다.
   }
@@ -753,6 +732,11 @@ onUnmounted(() => {
 
         <div v-if="gameState === 'my_record'" class="overlay">
           <MyRecord :currentName="currentName" @close="gameState = 'menu'" />
+        </div>
+
+        <!-- 매크로/봇 적발 시 띄워주는 전용 경고 모달 -->
+        <div v-if="showAntiCheatModal" class="overlay" style="z-index: 2000">
+          <AntiCheatModal @close="showAntiCheatModal = false" />
         </div>
       </div>
     </div>
