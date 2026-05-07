@@ -17,6 +17,7 @@ const gameState = ref('menu');
 const showAntiCheatModal = ref(false); // 매크로 적발 모달 표시 상태
 
 const score = ref(0);
+const holeElements = ref([]); // 각 Hole 컴포넌트의 DOM 요소를 참조하기 위한 ref 배열
 const timeLeft = ref(GAME_DURATION);
 
 const combo = ref(0);
@@ -87,6 +88,7 @@ const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole));
 let suspiciousClicks = 0;
 let clickTimestamps = []; // 마우스 광클 방지를 위한 클릭 시간 기록 배열
 let reactionTimes = []; // 매크로의 일정한 반응속도 패턴을 잡기 위한 배열
+const clickPositions = ref(Array.from({ length: BOARD_SIZE }, () => [])); // 홀별 클릭 좌표 기록
 let lastClickEvent = null; // Vue Devtools 등을 통한 직접 함수 호출 방지용
 
 // DOM 탐색 매크로를 유인하는 '투명 허니팟(가짜 두더지)' 데이터
@@ -120,6 +122,41 @@ function enforceAntiCheat() {
     }
   }
 
+  // 2. 클릭 좌표 일관성 분석 (인간은 매번 정확히 같은 픽셀을 누를 수 없음)
+  for (const positions of clickPositions.value) {
+    // 최근 5번의 클릭 기록이 쌓였을 때 검사
+    if (positions.length < 5) continue;
+
+    const allX = positions.map((p) => p.x);
+    const allY = positions.map((p) => p.y);
+
+    const meanX = allX.reduce((a, b) => a + b, 0) / allX.length;
+    const varianceX =
+      allX.reduce((a, b) => a + Math.pow(b - meanX, 2), 0) / allX.length;
+    const stdDevX = Math.sqrt(varianceX);
+
+    const meanY = allY.reduce((a, b) => a + b, 0) / allY.length;
+    const varianceY =
+      allY.reduce((a, b) => a + Math.pow(b - meanY, 2), 0) / allY.length;
+    const stdDevY = Math.sqrt(varianceY);
+
+    // 5번 연속 클릭의 X, Y 좌표 표준편차가 모두 1px 미만이면 봇으로 간주
+    if (stdDevX < 1 && stdDevY < 1) {
+      suspiciousClicks += 5; // 즉시 밴
+      break; // 한 번만 적발해도 충분
+    }
+  }
+
+  // 3. 최소 반응 속도 분석 (봇은 안전을 위해 특정 시간 이하로 절대 클릭하지 않음)
+  if (reactionTimes.length >= 15) {
+    const minReactionTime = Math.min(...reactionTimes);
+    // 최근 15번의 클릭 중 가장 빠른 반응이 280ms보다 느리다면 비정상
+    // 사람은 아무리 느려도 한두 번은 280ms 안쪽으로 반응하게 됨
+    if (minReactionTime > 280) {
+      suspiciousClicks += 2; // 의심 스택 추가
+    }
+  }
+
   if (suspiciousClicks >= 5 || score.value > 30000 || score.value < -5000) {
     // 화면을 메인 메뉴로 먼저 전환하여 렌더링 락(Lock)을 방지합니다.
     quitGame();
@@ -134,7 +171,7 @@ const catchMacro = () => {
 
 const catchUntrustedEvent = (e) => {
   // 실제 물리적 이벤트 발생 시간 기록 (이벤트 캡처 단계에서 실행되므로 컴포넌트 핸들러보다 먼저 실행됨)
-  lastClickEvent = { time: Date.now() };
+  lastClickEvent = { time: Date.now(), x: e.clientX, y: e.clientY };
 
   // 브라우저 네이티브 보안: 자바스크립트로 강제 발생시킨 가짜 클릭은 isTrusted가 false입니다.
   if (!e.isTrusted) {
@@ -259,6 +296,7 @@ const startGame = () => {
   clickTimestamps = [];
   reactionTimes = [];
   lastClickEvent = null;
+  clickPositions.value = Array.from({ length: BOARD_SIZE }, () => []);
   gameState.value = 'playing';
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
 
@@ -472,6 +510,25 @@ const handleHit = (index, entity) => {
     return;
   }
 
+  // 클릭 좌표 분석을 위한 데이터 수집
+  const holeEl = holeElements.value[index]?.$el;
+  if (holeEl && lastClickEvent) {
+    const rect = holeEl.getBoundingClientRect();
+    // 홀 내부의 상대 좌표 계산
+    const clickCoord = {
+      x: lastClickEvent.x - rect.left,
+      y: lastClickEvent.y - rect.top,
+    };
+
+    // 해당 홀의 클릭 좌표 기록
+    const holeSpecificPositions = clickPositions.value[index];
+    holeSpecificPositions.push(clickCoord);
+    // 최근 5개의 기록만 유지
+    if (holeSpecificPositions.length > 5) {
+      holeSpecificPositions.shift();
+    }
+  }
+
   // 매크로 방지: 반응 속도(Reaction Time) 검사
   // 사람이 시각적 정보를 인지하고 물리적으로 마우스를 누르기까지 보통 200ms 이상 소요됩니다.
   const reactionTime = Date.now() - entity.spawnTime;
@@ -620,6 +677,11 @@ onUnmounted(() => {
           <Hole
             v-for="(entity, index) in holes"
             :key="index"
+            :ref="
+              (el) => {
+                if (el) holeElements[index] = el;
+              }
+            "
             :entity="entity"
             @hit="handleHit(index, entity)"
           />
