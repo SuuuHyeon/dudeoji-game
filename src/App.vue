@@ -78,9 +78,29 @@ const createEmptyHole = () => ({
   floatingScore: null,
   floatingColor: null,
   timeoutId: null,
+  spawnTime: 0,
 });
 
 const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole));
+
+let suspiciousClicks = 0;
+
+// DOM 탐색 매크로를 유인하는 '투명 허니팟(가짜 두더지)' 데이터
+const honeypotEntity = ref({
+  id: 'trap',
+  type: 'normal',
+  active: true, // 매크로의 레이더에 걸리도록 항상 '활성화' 상태로 둡니다.
+  isHit: false,
+  floatingScore: null,
+  floatingColor: null,
+  timeoutId: null,
+  spawnTime: Date.now(),
+});
+
+const catchMacro = () => {
+  suspiciousClicks += 5; // 단 한 번이라도 치면 즉시 섀도우 밴 기준치 초과!
+  console.warn('[매크로 적발] 인간은 볼 수 없는 투명 허니팟 타격 감지!');
+};
 
 let lastInputIsTouch = false;
 
@@ -178,6 +198,7 @@ const startGame = () => {
   bombsHit.value = 0;
   isFever.value = false;
   consecutiveBombs = 0;
+  suspiciousClicks = 0;
   gameState.value = 'playing';
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
 
@@ -224,9 +245,10 @@ const endGame = async () => {
 
   // Hard Cap check (Anti-cheat for score forgery)
   // Max possible score is around ~20k-25k realistically.
-  if (score.value > 30000 || score.value < -5000) {
-    console.warn('Abnormal score detected. Skipping DB upload.');
-    gameState.value = 'leaderboard';
+  if (score.value > 30000 || score.value < -5000 || suspiciousClicks >= 5) {
+    alert('잡았다요놈');
+    console.warn('Abnormal gameplay detected (Macro/Bot). Skipping DB upload.');
+    gameState.value = 'menu';
     return;
   }
 
@@ -364,6 +386,7 @@ const spawnEntity = () => {
   hole.floatingScore = null;
   hole.floatingColor = null;
   hole.active = true;
+  hole.spawnTime = Date.now();
 
   hole.timeoutId = setTimeout(() => {
     if (hole.id === entityId) {
@@ -384,6 +407,17 @@ const handleHit = (index, entity) => {
   if (lastInputIsTouch) return;
 
   if (gameState.value !== 'playing' || !entity.active || entity.isHit) return;
+
+  // 매크로 방지: 반응 속도(Reaction Time) 검사
+  // 사람이 시각적 정보를 인지하고 마우스를 누르기까지 최소 150ms가 소요됩니다.
+  const reactionTime = Date.now() - entity.spawnTime;
+  if (reactionTime < 100) {
+    suspiciousClicks++;
+    console.warn(
+      `[매크로 의심] 비인간적인 반응 속도 감지 (${reactionTime}ms).`,
+    );
+    return; // 타격 판정을 무시합니다.
+  }
 
   let baseScore = 0;
   let color = '#fff';
@@ -517,6 +551,11 @@ onUnmounted(() => {
             :entity="entity"
             @hit="handleHit(index, entity)"
           />
+        </div>
+
+        <!-- 매크로 전용 함정: 사람은 볼 수 없고 DOM 스캐너만 클릭합니다. -->
+        <div class="honeypot-trap" aria-hidden="true">
+          <Hole :entity="honeypotEntity" @hit="catchMacro" />
         </div>
 
         <!-- Overlays -->
@@ -824,6 +863,17 @@ onUnmounted(() => {
   gap: 15px;
   width: 100%;
   aspect-ratio: 1 / 1;
+}
+
+.honeypot-trap {
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: auto;
+  overflow: hidden;
 }
 
 .overlay {
