@@ -65,12 +65,30 @@ const createEmptyHole = () => ({
 
 const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole));
 
+let lastInputIsTouch = false;
+
+const trackInputTypePointer = (e) => {
+  if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+    lastInputIsTouch = true;
+  } else if (e.pointerType === 'mouse') {
+    lastInputIsTouch = false;
+  }
+};
+
+const trackInputTypeTouch = () => {
+  lastInputIsTouch = true;
+};
+
 let gameTimer = null;
 let spawnTimer = null;
 let feverTimer = null;
 let gameStartTime = 0;
 
 onMounted(() => {
+  window.addEventListener('pointerdown', trackInputTypePointer, {
+    capture: true,
+  });
+  window.addEventListener('touchstart', trackInputTypeTouch, { capture: true });
   // Setup if needed
 });
 
@@ -131,18 +149,6 @@ const quitGame = () => {
     }
   });
   gameState.value = 'menu';
-};
-
-const blockTouch = (e) => {
-  // 터치스크린(패드, 터치 노트북, 펜 등)을 통한 입력을 차단합니다.
-  if (
-    e.pointerType === 'touch' ||
-    e.pointerType === 'pen' ||
-    e.type.startsWith('touch')
-  ) {
-    e.preventDefault();
-    e.stopPropagation();
-  }
 };
 
 const startGame = () => {
@@ -334,6 +340,9 @@ const spawnEntity = () => {
 };
 
 const handleHit = (index, entity) => {
+  // 터치 입력인 경우 타격 판정을 무시합니다.
+  if (lastInputIsTouch) return;
+
   if (gameState.value !== 'playing' || !entity.active || entity.isHit) return;
 
   let baseScore = 0;
@@ -374,6 +383,11 @@ const handleHit = (index, entity) => {
     holes.value[index].floatingColor = color;
     clearTimeout(holes.value[index].timeoutId);
 
+    // 두더지를 성공적으로 잡은 경우 즉시 다음 두더지 스폰
+    clearTimeout(spawnTimer);
+    spawnEntity();
+    scheduleSpawn();
+
     setTimeout(() => {
       if (holes.value[index] && holes.value[index].id === entity.id) {
         holes.value[index].active = false;
@@ -384,6 +398,12 @@ const handleHit = (index, entity) => {
 };
 
 onUnmounted(() => {
+  window.removeEventListener('pointerdown', trackInputTypePointer, {
+    capture: true,
+  });
+  window.removeEventListener('touchstart', trackInputTypeTouch, {
+    capture: true,
+  });
   clearInterval(countdownTimer);
   clearInterval(gameTimer);
   clearTimeout(spawnTimer);
@@ -438,12 +458,7 @@ onUnmounted(() => {
       </div>
 
       <div class="board-wrapper">
-        <div
-          class="grid"
-          @touchstart.capture="blockTouch"
-          @touchend.capture="blockTouch"
-          @pointerdown.capture="blockTouch"
-        >
+        <div class="grid">
           <Hole
             v-for="(entity, index) in holes"
             :key="index"
