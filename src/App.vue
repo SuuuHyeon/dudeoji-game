@@ -83,6 +83,7 @@ let gameTimer = null;
 let spawnTimer = null;
 let feverTimer = null;
 let gameStartTime = 0;
+let consecutiveBombs = 0;
 
 onMounted(() => {
   window.addEventListener('pointerdown', trackInputTypePointer, {
@@ -158,6 +159,7 @@ const startGame = () => {
   maxCombo.value = 0;
   bombsHit.value = 0;
   isFever.value = false;
+  consecutiveBombs = 0;
   gameState.value = 'playing';
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
 
@@ -264,11 +266,25 @@ const getSpawnDelay = () => {
 };
 
 const getRandomType = () => {
-  if (isFever.value) return 'golden'; // Only golden in fever
+  if (isFever.value) {
+    consecutiveBombs = 0;
+    return 'golden'; // Only golden in fever
+  }
 
   const rand = Math.random();
-  if (rand < 0.15) return 'golden';
-  if (rand < 0.35) return 'bomb';
+  if (rand < 0.15) {
+    consecutiveBombs = 0;
+    return 'golden';
+  }
+  if (rand < 0.35) {
+    if (consecutiveBombs >= 2) {
+      consecutiveBombs = 0;
+      return 'normal'; // 2번 연속 폭탄이 나왔다면 이번에는 강제로 일반 두더지 스폰
+    }
+    consecutiveBombs++;
+    return 'bomb';
+  }
+  consecutiveBombs = 0;
   return 'normal';
 };
 
