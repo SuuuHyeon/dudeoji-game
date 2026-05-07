@@ -33,6 +33,8 @@ let countdownTimer = null;
 const maxCombo = ref(0);
 const bombsHit = ref(0);
 
+let currentSessionId = null; // 백엔드 검증용 1회용 세션 ID
+
 const patchNotes = ref([]);
 
 const fetchPatchNotes = async () => {
@@ -283,7 +285,7 @@ const quitGame = () => {
   gameState.value = 'menu';
 };
 
-const startGame = () => {
+const startGame = async () => {
   score.value = 0;
   timeLeft.value = GAME_DURATION;
   combo.value = 0;
@@ -299,6 +301,19 @@ const startGame = () => {
   teleportCount = 0;
   lastClickEvent = null;
   gameState.value = 'playing';
+  currentSessionId = null;
+
+  // 서버에서 1회용 세션과 시작 시간을 발급받습니다. (해커의 1초 컷 API 공격 방어용)
+  if (currentName.value) {
+    try {
+      const { data } = await supabase.rpc('start_game_session', {
+        p_name: currentName.value,
+      });
+      if (data) currentSessionId = data;
+    } catch (err) {
+      console.error('Session init failed');
+    }
+  }
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
 
   gameStartTime = Date.now();
@@ -312,19 +327,6 @@ const startGame = () => {
   }, 100); // check more frequently to be precise
 
   scheduleSpawn();
-};
-
-const generateSignature = async (name, score) => {
-  const salt =
-    import.meta.env.VITE_GAME_SECRET_SALT || 'default_arcade_salt_123!';
-  const message = `${name}:${score}:${salt}`;
-  const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-  return hashHex;
 };
 
 const endGame = async () => {
@@ -359,31 +361,18 @@ const endGame = async () => {
     name: currentName.value,
   });
 
-  // Generate Cryptographic Hash Signature
-  const signature = await generateSignature(currentName.value, score.value);
-
-  // Auto-submit score to DB if it's a new best for this user
-  if (score.value > dbBestScore.value) {
+  // 통합된 보안 점수 제출 로직 (서버에서 시간 검증, 최고 점수 갱신, 히스토리를 한 번에 처리합니다)
+  if (currentSessionId && currentName.value) {
     try {
-      await supabase.rpc('update_best_score', {
+      const { data } = await supabase.rpc('submit_secure_score', {
+        p_session_id: currentSessionId,
         p_name: currentName.value,
         p_pin: currentPin.value,
-        p_score: score.value,
-        p_signature: signature,
       });
-      dbBestScore.value = score.value;
-    } catch (err) {}
-  }
-
-  // Always append to history
-  if (currentName.value) {
-    try {
-      await supabase.rpc('insert_score_history', {
-        p_name: currentName.value,
-        p_pin: currentPin.value,
-        p_score: score.value,
-        p_signature: signature,
-      });
+      // 서버 통과 및 최고 점수 갱신 시 로컬 상태 업데이트
+      if (data && score.value > dbBestScore.value) {
+        dbBestScore.value = score.value;
+      }
     } catch (err) {}
   }
 
