@@ -85,6 +85,8 @@ const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole));
 
 let suspiciousClicks = 0;
 let clickTimestamps = []; // 마우스 광클 방지를 위한 클릭 시간 기록 배열
+let reactionTimes = []; // 매크로의 일정한 반응속도 패턴을 잡기 위한 배열
+let lastClickEvent = null; // Vue Devtools 등을 통한 직접 함수 호출 방지용
 
 // DOM 탐색 매크로를 유인하는 '투명 허니팟(가짜 두더지)' 데이터
 const honeypotEntity = ref({
@@ -101,6 +103,25 @@ const honeypotEntity = ref({
 function enforceAntiCheat() {
   // 게임 중일 때만 검사하여 조건 도달 시 즉시 포기 처리
   if (gameState.value !== 'playing') return;
+
+  // 인간은 기계처럼 일정한 속도로 계속 클릭할 수 없음을 이용한 표준편차 검사
+  if (reactionTimes.length >= 10) {
+    const mean =
+      reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length;
+    const variance =
+      reactionTimes.reduce((a, b) => a + Math.pow(b - mean, 2), 0) /
+      reactionTimes.length;
+    const stdDev = Math.sqrt(variance);
+
+    // 반응속도 표준편차가 20ms 미만이면 기계(매크로)로 간주
+    if (stdDev < 20) {
+      console.warn(
+        `[매크로 적발] 기계적인 반응속도 일관성 감지 (표준편차: ${stdDev.toFixed(2)}ms)`,
+      );
+      suspiciousClicks += 5; // 즉시 밴
+    }
+  }
+
   if (suspiciousClicks >= 5 || score.value > 30000 || score.value < -5000) {
     console.warn(
       'Abnormal gameplay detected (Macro/Bot). Game forced to quit.',
@@ -120,6 +141,9 @@ const catchMacro = () => {
 };
 
 const catchUntrustedEvent = (e) => {
+  // 실제 물리적 이벤트 발생 시간 기록 (이벤트 캡처 단계에서 실행되므로 컴포넌트 핸들러보다 먼저 실행됨)
+  lastClickEvent = { time: Date.now() };
+
   // 브라우저 네이티브 보안: 자바스크립트로 강제 발생시킨 가짜 클릭은 isTrusted가 false입니다.
   if (!e.isTrusted) {
     suspiciousClicks += 5; // 즉시 섀도우 밴 기준치 초과
@@ -243,6 +267,8 @@ const startGame = () => {
   consecutiveBombs = 0;
   suspiciousClicks = 0;
   clickTimestamps = [];
+  reactionTimes = [];
+  lastClickEvent = null;
   gameState.value = 'playing';
   holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
 
@@ -455,10 +481,19 @@ const handleHit = (index, entity) => {
 
   if (gameState.value !== 'playing' || !entity.active || entity.isHit) return;
 
+  // 1. 함수 직접 호출(Vue Devtools 등) 방어
+  // 진짜 클릭 이벤트가 발생한 지 100ms 이내가 아니라면, 스크립트로 handleHit만 강제 호출한 것임
+  if (!lastClickEvent || Date.now() - lastClickEvent.time > 100) {
+    suspiciousClicks += 5;
+    console.warn('[매크로 적발] 이벤트 없는 비정상 함수 직접 호출 감지!');
+    enforceAntiCheat();
+    return;
+  }
+
   // 매크로 방지: 반응 속도(Reaction Time) 검사
   // 사람이 시각적 정보를 인지하고 물리적으로 마우스를 누르기까지 보통 200ms 이상 소요됩니다.
   const reactionTime = Date.now() - entity.spawnTime;
-  if (reactionTime < 150) {
+  if (reactionTime < 160) {
     suspiciousClicks++;
     console.warn(
       `[매크로 의심] 비인간적인 반응 속도 감지 (${reactionTime}ms).`,
@@ -466,6 +501,10 @@ const handleHit = (index, entity) => {
     enforceAntiCheat();
     return; // 타격 판정을 무시합니다.
   }
+
+  // 정상 반응속도 기록 (표준편차 패턴 분석용, 최근 20개만 유지)
+  reactionTimes.push(reactionTime);
+  if (reactionTimes.length > 20) reactionTimes.shift();
 
   let baseScore = 0;
   let color = '#fff';
@@ -608,7 +647,19 @@ onUnmounted(() => {
         </div>
 
         <!-- 매크로 전용 함정: 사람은 볼 수 없고 DOM 스캐너만 클릭합니다. -->
-        <div class="honeypot-trap" aria-hidden="true">
+        <div
+          style="
+            position: absolute;
+            top: -9999px;
+            left: -9999px;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: auto;
+            overflow: hidden;
+          "
+          aria-hidden="true"
+        >
           <Hole :entity="honeypotEntity" @hit="catchMacro" />
         </div>
 
@@ -917,17 +968,6 @@ onUnmounted(() => {
   gap: 15px;
   width: 100%;
   aspect-ratio: 1 / 1;
-}
-
-.honeypot-trap {
-  position: absolute;
-  top: -9999px;
-  left: -9999px;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: auto;
-  overflow: hidden;
 }
 
 .overlay {
