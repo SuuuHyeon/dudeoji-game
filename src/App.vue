@@ -102,9 +102,18 @@ const catchMacro = () => {
   console.warn('[매크로 적발] 인간은 볼 수 없는 투명 허니팟 타격 감지!');
 };
 
+const catchUntrustedEvent = (e) => {
+  // 브라우저 네이티브 보안: 자바스크립트로 강제 발생시킨 가짜 클릭은 isTrusted가 false입니다.
+  if (!e.isTrusted) {
+    suspiciousClicks += 5; // 즉시 섀도우 밴 기준치 초과
+    console.warn('[매크로 적발] 개발자 도구 스크립트(가짜 클릭) 감지!');
+  }
+};
+
 let lastInputIsTouch = false;
 
 const trackInputTypePointer = (e) => {
+  catchUntrustedEvent(e);
   if (e.pointerType === 'touch' || e.pointerType === 'pen') {
     lastInputIsTouch = true;
   } else if (e.pointerType === 'mouse') {
@@ -124,6 +133,8 @@ let consecutiveBombs = 0;
 
 onMounted(() => {
   fetchPatchNotes();
+  window.addEventListener('click', catchUntrustedEvent, { capture: true });
+  window.addEventListener('mousedown', catchUntrustedEvent, { capture: true });
   window.addEventListener('pointerdown', trackInputTypePointer, {
     capture: true,
   });
@@ -409,9 +420,9 @@ const handleHit = (index, entity) => {
   if (gameState.value !== 'playing' || !entity.active || entity.isHit) return;
 
   // 매크로 방지: 반응 속도(Reaction Time) 검사
-  // 사람이 시각적 정보를 인지하고 마우스를 누르기까지 최소 150ms가 소요됩니다.
+  // 사람이 시각적 정보를 인지하고 물리적으로 마우스를 누르기까지 보통 200ms 이상 소요됩니다.
   const reactionTime = Date.now() - entity.spawnTime;
-  if (reactionTime < 100) {
+  if (reactionTime < 150) {
     suspiciousClicks++;
     console.warn(
       `[매크로 의심] 비인간적인 반응 속도 감지 (${reactionTime}ms).`,
@@ -477,6 +488,10 @@ onUnmounted(() => {
     capture: true,
   });
   window.removeEventListener('touchstart', trackInputTypeTouch, {
+    capture: true,
+  });
+  window.removeEventListener('click', catchUntrustedEvent, { capture: true });
+  window.removeEventListener('mousedown', catchUntrustedEvent, {
     capture: true,
   });
   clearInterval(countdownTimer);
