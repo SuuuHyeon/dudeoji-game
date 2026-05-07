@@ -1,837 +1,161 @@
 <script setup>
-import { ref, onUnmounted, computed, onMounted, watch } from 'vue';
-import Hole from './components/Hole.vue';
-import AuthModal from './components/AuthModal.vue';
-import Leaderboard from './components/Leaderboard.vue';
-import MyRecord from './components/MyRecord.vue';
-import PixelMascot from './components/PixelMascot.vue';
-import AntiCheatModal from './components/AntiCheatModal.vue';
-import { supabase } from './lib/supabase.js';
+import { watch, onMounted, ref } from 'vue'
+import { useAuth } from './composables/useAuth.js'
+import { useAntiCheat } from './composables/useAntiCheat.js'
+import { useGame } from './composables/useGame.js'
+import { useAnalytics } from './composables/useAnalytics.js'
+import { fetchPatchNotes } from './services/api.js'
 
-const GAME_DURATION = 30;
-const BOARD_SIZE = 16;
+// Components
+import GameHeader from './components/game/GameHeader.vue'
+import GameBoard from './components/game/GameBoard.vue'
+import CountdownOverlay from './components/game/CountdownOverlay.vue'
+import MainMenu from './components/menu/MainMenu.vue'
+import PatchBoard from './components/menu/PatchBoard.vue'
+import AuthModal from './components/auth/AuthModal.vue'
+import Leaderboard from './components/leaderboard/Leaderboard.vue'
+import MyRecord from './components/leaderboard/MyRecord.vue'
+import AntiCheatModal from './components/modals/AntiCheatModal.vue'
 
-// States: 'menu', 'auth', 'playing', 'leaderboard'
-const gameState = ref('menu');
+// ── Composables ──
+const auth = useAuth()
+const { trackViewLeaderboard, trackViewMyRecord } = useAnalytics()
 
-const showAntiCheatModal = ref(false); // 매크로 적발 모달 표시 상태
+// antiCheat는 gameState/score를 참조해야 하므로 프록시 ref를 통해 연결합니다.
+const gameStateRef = ref('menu')
+const scoreRef = ref(0)
 
-const score = ref(0);
-const holeElements = ref([]); // 각 Hole 컴포넌트의 DOM 요소를 참조하기 위한 ref 배열
-const timeLeft = ref(GAME_DURATION);
+const antiCheat = useAntiCheat(gameStateRef, scoreRef)
+const game = useGame(auth, antiCheat)
 
-const combo = ref(0);
-const isFever = ref(false);
+// useGame이 소유하는 gameState/score를 antiCheat 프록시와 동기화
+watch(game.gameState, (val) => { gameStateRef.value = val })
+watch(game.score, (val) => { scoreRef.value = val })
 
-const currentName = ref('');
-const currentPin = ref('');
-const dbBestScore = ref(0);
+// holeElements를 game에 연결
+const holeElements = game.holeElements
 
-const countdownValue = ref(3);
-let countdownTimer = null;
-
-const maxCombo = ref(0);
-const bombsHit = ref(0);
-
-let currentSessionId = null; // 백엔드 검증용 1회용 세션 ID
-
-const patchNotes = ref([]);
-
-const fetchPatchNotes = async () => {
+// ── 패치노트 ──
+const patchNotes = ref([])
+onMounted(async () => {
   try {
-    const { data, error } = await supabase
-      .from('patch_notes')
-      .select('content')
-      .order('id', { ascending: false })
-      .limit(5); // 최근 5개까지만 가져옵니다
-
-    if (error) throw error;
-    if (data) patchNotes.value = data.map((item) => item.content);
-  } catch (err) {}
-};
-
-const trackEvent = (eventName, params = {}) => {
-  if (window.gtag) {
-    window.gtag('event', eventName, params);
+    patchNotes.value = await fetchPatchNotes()
+  } catch (err) {
+    // silent fail
   }
-};
+})
 
-const identifyUser = (name) => {
-  if (window.gtag) {
-    // 구글 애널리틱스에 유저 ID 설정 (G-WCZJ0R9Y0P는 index.html과 동일해야 함)
-    window.gtag('config', 'G-WCZJ0R9Y0P', {
-      user_id: name,
-    });
-    // 유저 속성으로 닉네임 저장
-    window.gtag('set', 'user_properties', {
-      nickname: name,
-    });
-  }
-};
+// ── 화면 전환 이벤트 추적 ──
+watch(game.gameState, (newVal) => {
+  if (newVal === 'leaderboard') trackViewLeaderboard()
+  if (newVal === 'my_record') trackViewMyRecord()
+})
 
-watch(gameState, (newVal) => {
-  if (newVal === 'leaderboard') trackEvent('view_leaderboard');
-  if (newVal === 'my_record') trackEvent('view_my_record');
-});
+// ── 인증 모드 ──
+const authMode = ref('login')
 
-const createEmptyHole = () => ({
-  id: null,
-  type: 'normal',
-  active: false,
-  isHit: false,
-  floatingScore: null,
-  floatingColor: null,
-  timeoutId: null,
-  spawnTime: 0,
-});
-
-const holes = ref(Array.from({ length: BOARD_SIZE }, createEmptyHole));
-
-let suspiciousClicks = 0;
-let clickTimestamps = []; // 마우스 광클 방지를 위한 클릭 시간 기록 배열
-let reactionTimes = []; // 매크로의 일정한 반응속도 패턴을 잡기 위한 배열
-let lastClickEvent = null; // Vue Devtools 등을 통한 직접 함수 호출 방지용
-let clickHistory = []; // { index, relX, relY } 기록 (물리적 좌표 일관성 패턴 분석용)
-let mouseMoveEventCount = 0; // 커서 이동 궤적 없는 순간이동 감지용
-let teleportCount = 0; // 연속 순간이동 스택
-
-// DOM 탐색 매크로를 유인하는 '투명 허니팟(가짜 두더지)' 데이터
-const honeypotEntity = ref({
-  id: 'trap',
-  type: 'normal',
-  active: true, // 매크로의 레이더에 걸리도록 항상 '활성화' 상태로 둡니다.
-  isHit: false,
-  floatingScore: null,
-  floatingColor: null,
-  timeoutId: null,
-  spawnTime: Date.now(),
-});
-
-function enforceAntiCheat() {
-  // 게임 중일 때만 검사하여 조건 도달 시 즉시 포기 처리
-  if (gameState.value !== 'playing') return;
-
-  // 인간은 기계처럼 일정한 속도로 계속 클릭할 수 없음을 이용한 표준편차 검사
-  if (reactionTimes.length >= 10) {
-    const mean =
-      reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length;
-    const variance =
-      reactionTimes.reduce((a, b) => a + Math.pow(b - mean, 2), 0) /
-      reactionTimes.length;
-    const stdDev = Math.sqrt(variance);
-
-    // 컴퓨터의 화면 캡처 딜레이 + 매크로의 6ms 난수를 고려해도 표준편차는 25ms를 넘기 힘듭니다.
-    // 사람은 최소 30ms 이상의 불규칙한 오차가 발생하므로 기준을 25ms 미만으로 상향하여 봇을 완벽히 차단합니다.
-    if (stdDev < 25) {
-      suspiciousClicks += 5; // 즉시 밴
-      reactionTimes = []; // 배열을 초기화하여 중복 적발을 방지합니다.
-    }
-  }
-
-  if (suspiciousClicks >= 5 || score.value > 30000 || score.value < -5000) {
-    // 화면을 메인 메뉴로 먼저 전환하여 렌더링 락(Lock)을 방지합니다.
-    quitGame();
-    showAntiCheatModal.value = true;
-  }
+const onShowAuth = (mode) => {
+  authMode.value = mode
+  auth.onAuthStart(mode)
+  game.gameState.value = 'auth'
 }
 
-const catchMacro = () => {
-  suspiciousClicks += 5; // 단 한 번이라도 치면 즉시 섀도우 밴 기준치 초과!
-  enforceAntiCheat();
-};
-
-const catchUntrustedEvent = (e) => {
-  // 실제 물리적 이벤트 발생 시간 기록 (이벤트 캡처 단계에서 실행되므로 컴포넌트 핸들러보다 먼저 실행됨)
-  lastClickEvent = { time: Date.now(), x: e.clientX, y: e.clientY };
-
-  // 브라우저 네이티브 보안: 자바스크립트로 강제 발생시킨 가짜 클릭은 isTrusted가 false입니다.
-  if (!e.isTrusted) {
-    suspiciousClicks += 5; // 즉시 섀도우 밴 기준치 초과
-    enforceAntiCheat();
-  }
-};
-
-let lastInputIsTouch = false;
-
-const trackInputTypePointer = (e) => {
-  catchUntrustedEvent(e);
-  if (e.pointerType === 'touch' || e.pointerType === 'pen') {
-    lastInputIsTouch = true;
-  } else if (e.pointerType === 'mouse') {
-    lastInputIsTouch = false;
-
-    // 오토마우스(광클) 실시간 방어: 0.5초 이내에 8번 이상 마우스 클릭 시 즉시 차단
-    if (gameState.value === 'playing') {
-      const now = Date.now();
-      clickTimestamps.push(now);
-      // 최근 500ms(0.5초) 이내의 클릭 기록만 남깁니다.
-      clickTimestamps = clickTimestamps.filter((t) => now - t < 500);
-
-      if (clickTimestamps.length >= 8) {
-        suspiciousClicks += 5; // 즉시 섀도우 밴 기준치 초과!
-        enforceAntiCheat();
-      }
-    }
-  }
-};
-
-const trackInputTypeTouch = () => {
-  lastInputIsTouch = true;
-};
-
-let gameTimer = null;
-let spawnTimer = null;
-let feverTimer = null;
-let gameStartTime = 0;
-let consecutiveBombs = 0;
-
-onMounted(() => {
-  fetchPatchNotes();
-  window.addEventListener(
-    'mousemove',
-    () => {
-      mouseMoveEventCount++;
-    },
-    { capture: true },
-  );
-  window.addEventListener('click', catchUntrustedEvent, { capture: true });
-  window.addEventListener('mousedown', catchUntrustedEvent, { capture: true });
-  window.addEventListener('pointerdown', trackInputTypePointer, {
-    capture: true,
-  });
-  window.addEventListener('touchstart', trackInputTypeTouch, { capture: true });
-  // Setup if needed
-
-  // 배포 환경에서 기본적인 우클릭 및 개발자 도구 단축키 차단 (우회는 가능하지만 매우 귀찮게 만듦)
-  if (!import.meta.env.DEV) {
-    window.addEventListener('contextmenu', (e) => e.preventDefault());
-    window.addEventListener('keydown', (e) => {
-      if (
-        e.key === 'F12' || // F12
-        (e.ctrlKey &&
-          e.shiftKey &&
-          (e.key === 'I' || e.key === 'J' || e.key === 'C')) || // Windows: Ctrl+Shift+I/J/C
-        (e.ctrlKey && e.key === 'U') || // Windows: Ctrl+U (소스보기)
-        (e.metaKey &&
-          e.altKey &&
-          (e.key === 'I' || e.key === 'J' || e.key === 'C')) || // Mac: Cmd+Option+I/J/C
-        (e.metaKey && e.shiftKey && e.key === 'C') // Mac: Cmd+Shift+C
-      ) {
-        e.preventDefault();
-      }
-    });
-  }
-});
-
-const multiplier = computed(() => {
-  if (combo.value >= 20) return 2.0;
-  if (combo.value >= 10) return 1.5;
-  return 1.0;
-});
-
-const authMode = ref('login');
-
-const startAuth = (mode) => {
-  authMode.value = mode;
-  gameState.value = 'auth';
-  trackEvent(mode === 'register' ? 'click_register' : 'click_login');
-};
-
-const handleAuthSuccess = (userData) => {
-  currentName.value = userData.name;
-  currentPin.value = userData.pin;
-  dbBestScore.value = userData.score;
-  gameState.value = 'menu';
-
-  // Track login/auth success
-  identifyUser(userData.name);
-  trackEvent(
-    authMode.value === 'register' ? 'sign_up_complete' : 'login_success',
-    { method: 'pin' },
-  );
-};
-
-const prepareGame = () => {
-  // Track game start
-  trackEvent('game_start', { method: 'button' });
-
-  gameState.value = 'countdown';
-  countdownValue.value = 3;
-  countdownTimer = setInterval(() => {
-    countdownValue.value--;
-    if (countdownValue.value === 0) {
-      clearInterval(countdownTimer);
-      startGame();
-    }
-  }, 1000);
-};
-
-const quitGame = () => {
-  trackEvent('game_quit');
-  clickHistory = [];
-  mouseMoveEventCount = 0;
-  teleportCount = 0;
-  clearInterval(gameTimer);
-  clearTimeout(spawnTimer);
-  clearTimeout(feverTimer);
-  isFever.value = false;
-  holes.value.forEach((hole) => {
-    if (hole && hole.timeoutId) clearTimeout(hole.timeoutId);
-    if (hole) {
-      hole.active = false;
-      hole.isHit = false;
-    }
-  });
-  gameState.value = 'menu';
-};
-
-const startGame = async () => {
-  score.value = 0;
-  timeLeft.value = GAME_DURATION;
-  combo.value = 0;
-  maxCombo.value = 0;
-  bombsHit.value = 0;
-  isFever.value = false;
-  consecutiveBombs = 0;
-  suspiciousClicks = 0;
-  clickTimestamps = [];
-  reactionTimes = [];
-  clickHistory = [];
-  mouseMoveEventCount = 0;
-  teleportCount = 0;
-  lastClickEvent = null;
-  gameState.value = 'playing';
-  currentSessionId = null;
-
-  // 서버에서 1회용 세션과 시작 시간을 발급받습니다. (해커의 1초 컷 API 공격 방어용)
-  if (currentName.value) {
-    try {
-      const { data } = await supabase.rpc('start_game_session', {
-        p_name: currentName.value,
-      });
-      if (data) currentSessionId = data;
-    } catch (err) {
-      console.error('Session init failed');
-    }
-  }
-  holes.value = Array.from({ length: BOARD_SIZE }, createEmptyHole);
-
-  gameStartTime = Date.now();
-
-  gameTimer = setInterval(() => {
-    const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
-    timeLeft.value = Math.max(0, GAME_DURATION - elapsedSeconds);
-    if (timeLeft.value <= 0) {
-      endGame();
-    }
-  }, 100); // check more frequently to be precise
-
-  scheduleSpawn();
-};
-
-const endGame = async () => {
-  clearInterval(gameTimer);
-  clearTimeout(spawnTimer);
-  clearTimeout(feverTimer);
-  isFever.value = false;
-
-  // Clear any active entities
-  holes.value.forEach((hole) => {
-    if (hole && hole.timeoutId) clearTimeout(hole.timeoutId);
-    if (hole) {
-      hole.active = false;
-      hole.isHit = false;
-    }
-  });
-
-  // Hard Cap check (Anti-cheat for score forgery)
-  // Max possible score is around ~20k-25k realistically.
-  if (score.value > 30000 || score.value < -5000 || suspiciousClicks >= 5) {
-    // 화면을 리더보드/메뉴로 먼저 전환
-    gameState.value = 'menu';
-    showAntiCheatModal.value = true;
-    return;
-  }
-
-  // Track game end with score
-  trackEvent('game_end', {
-    final_score: score.value,
-    max_combo: maxCombo.value,
-    bombs_hit: bombsHit.value,
-    name: currentName.value,
-  });
-
-  // 통합된 보안 점수 제출 로직 (서버에서 시간 검증, 최고 점수 갱신, 히스토리를 한 번에 처리합니다)
-  if (currentSessionId && currentName.value) {
-    try {
-      const { data } = await supabase.rpc('submit_secure_score', {
-        p_session_id: currentSessionId,
-        p_name: currentName.value,
-        p_pin: currentPin.value,
-      });
-      // 서버 통과 및 최고 점수 갱신 시 로컬 상태 업데이트
-      if (data && score.value > dbBestScore.value) {
-        dbBestScore.value = score.value;
-      }
-    } catch (err) {}
-  }
-
-  // Go straight to leaderboard
-  gameState.value = 'leaderboard';
-};
-
-const getSpawnDelay = () => {
-  if (isFever.value) return 375; // 0.8x of previous speed (was 300)
-
-  const minDelay = 500;
-  const maxDelay = 1200;
-  const progress = (GAME_DURATION - timeLeft.value) / GAME_DURATION;
-  return maxDelay - (maxDelay - minDelay) * progress;
-};
-
-const getRandomType = () => {
-  if (isFever.value) {
-    consecutiveBombs = 0;
-    return 'golden'; // Only golden in fever
-  }
-
-  const rand = Math.random();
-  if (rand < 0.15) {
-    consecutiveBombs = 0;
-    return 'golden';
-  }
-  if (rand < 0.35) {
-    if (consecutiveBombs >= 2) {
-      consecutiveBombs = 0;
-      return 'normal'; // 2번 연속 폭탄이 나왔다면 이번에는 강제로 일반 두더지 스폰
-    }
-    consecutiveBombs++;
-    return 'bomb';
-  }
-  consecutiveBombs = 0;
-  return 'normal';
-};
-
-const getActiveDuration = (type) => {
-  if (isFever.value) return 750; // 0.8x of previous speed (was 600)
-
-  const baseDuration = getSpawnDelay() * 1.5;
-  if (type === 'golden') return baseDuration * 0.8;
-  if (type === 'bomb') return baseDuration * 1.2;
-  return baseDuration;
-};
-
-const scheduleSpawn = (customDelay = null) => {
-  if (gameState.value !== 'playing') return;
-
-  const delay = customDelay !== null ? customDelay : getSpawnDelay();
-
-  spawnTimer = setTimeout(() => {
-    const type = spawnEntity();
-    // 폭탄이 나왔을 경우, 플레이어가 지루하게 기다리지 않도록 다음 스폰 대기 시간을 40%로 단축시킵니다.
-    const nextDelay = type === 'bomb' ? getSpawnDelay() * 0.4 : null;
-    scheduleSpawn(nextDelay);
-  }, delay);
-};
-
-const triggerFever = () => {
-  isFever.value = true;
-  clearTimeout(feverTimer);
-  feverTimer = setTimeout(() => {
-    isFever.value = false;
-  }, 5000); // 5 seconds of fever
-};
-
-const breakCombo = () => {
-  combo.value = 0;
-};
-
-const spawnEntity = () => {
-  if (gameState.value !== 'playing') return null;
-
-  const emptyIndices = [];
-  holes.value.forEach((hole, index) => {
-    if (!hole || (!hole.active && !hole.isHit)) emptyIndices.push(index);
-  });
-
-  if (emptyIndices.length === 0) return null;
-
-  const randomIndex =
-    emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
-  const type = getRandomType();
-  const entityId = Date.now();
-
-  const hole = holes.value[randomIndex];
-  if (hole && hole.timeoutId) clearTimeout(hole.timeoutId);
-
-  hole.id = entityId;
-  hole.type = type;
-  hole.isHit = false;
-  hole.floatingScore = null;
-  hole.floatingColor = null;
-  hole.active = true;
-  hole.spawnTime = Date.now();
-
-  hole.timeoutId = setTimeout(() => {
-    if (hole.id === entityId) {
-      // If it naturally hides and wasn't hit, and wasn't a bomb, combo breaks
-      if (!hole.isHit && hole.type !== 'bomb') {
-        breakCombo();
-      }
-      hole.active = false;
-      hole.isHit = false;
-    }
-  }, getActiveDuration(type));
-
-  return type;
-};
-
-const handleHit = (index, entity) => {
-  // 터치 입력인 경우 타격 판정을 무시합니다.
-  if (lastInputIsTouch) return;
-
-  if (gameState.value !== 'playing' || !entity.active || entity.isHit) return;
-
-  // 1. 함수 직접 호출(Vue Devtools 등) 방어
-  // 브라우저 렌더링 지연(Lag)을 고려하여 시간차 허용 범위를 100ms -> 500ms로 넉넉하게 변경
-  if (!lastClickEvent || Date.now() - lastClickEvent.time > 500) {
-    suspiciousClicks += 5;
-    enforceAntiCheat();
-    return;
-  }
-
-  // 2. 파이썬 OS 레벨 매크로 완벽 방어: 좌표 일관성 분석 및 순간이동 감지
-  const holeEl = holeElements.value[index]?.$el;
-  if (holeEl && lastClickEvent) {
-    const rect = holeEl.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      const relX = (lastClickEvent.x - rect.left) / rect.width;
-      const relY = (lastClickEvent.y - rect.top) / rect.height;
-
-      clickHistory.push({ index, relX, relY });
-      if (clickHistory.length > 10) clickHistory.shift();
-
-      // [방어 A] 궤적 없는 순간이동(Teleport) 감지
-      // OS API로 커서를 순간이동 시키면 다른 구멍을 쳤음에도 중간에 mousemove 궤적이 1번 이하로 잡힙니다.
-      if (!lastInputIsTouch && clickHistory.length >= 2) {
-        const lastClick = clickHistory[clickHistory.length - 2];
-        if (lastClick.index !== index) {
-          // 사람은 마우스로 다른 구멍까지 이동할 때 최소 5번 이상의 move 궤적이 남습니다. 5번 미만이면 매크로의 순간이동(Teleport)입니다.
-          if (mouseMoveEventCount < 5) {
-            teleportCount++;
-            if (teleportCount >= 2) {
-              // 연속 2회 순간이동 시 파이썬 매크로 확정
-              suspiciousClicks += 5;
-              enforceAntiCheat();
-              return;
-            }
-          } else {
-            teleportCount = 0; // 정상적으로 마우스를 끌어서 쳤다면 스택 초기화
-          }
-        }
-      }
-      mouseMoveEventCount = 0; // 이동 기록 초기화
-
-      // [방어 B] 기계적인 클릭 좌표 일관성 검사
-      // 봇은 화면을 분할해 항상 구멍의 같은 수학적 좌표 비율(예: X: 50%, Y: 65%)을 누릅니다.
-      const uniqueHoles = new Set(clickHistory.map((c) => c.index));
-      if (uniqueHoles.size >= 3) {
-        const allX = clickHistory.map((c) => c.relX);
-        const allY = clickHistory.map((c) => c.relY);
-
-        // NaN이 발생하던 치명적인 오타(Math.pow의 두 번째 인자 누락)를 수정하고 정상적으로 평균과 편차를 구합니다.
-        const meanX = allX.reduce((a, b) => a + b, 0) / allX.length;
-        const meanY = allY.reduce((a, b) => a + b, 0) / allY.length;
-        const stdDevX = Math.sqrt(
-          allX.reduce((a, b) => a + Math.pow(b - meanX, 2), 0) / allX.length,
-        );
-        const stdDevY = Math.sqrt(
-          allY.reduce((a, b) => a + Math.pow(b - meanY, 2), 0) / allY.length,
-        );
-
-        // 매크로가 ±1 픽셀의 오차를 줘도 구멍 크기 대비 표준편차는 2% 이내입니다. 사람은 10% 이상 벌어집니다.
-        // 5% 미만의 정밀함을 보이면 기계로 차단합니다.
-        if (stdDevX < 0.05 && stdDevY < 0.05) {
-          suspiciousClicks += 5;
-          enforceAntiCheat();
-          return;
-        }
-      }
-    }
-  }
-
-  // 매크로 방지: 반응 속도(Reaction Time) 검사
-  // 사람이 시각적 정보를 인지하고 물리적으로 마우스를 누르기까지 보통 200ms 이상 소요됩니다.
-  const reactionTime = Date.now() - entity.spawnTime;
-  if (reactionTime < 160) {
-    suspiciousClicks++;
-    enforceAntiCheat();
-    return; // 타격 판정을 무시합니다.
-  }
-
-  // 정상 반응속도 기록 (표준편차 패턴 분석용, 최근 20개만 유지)
-  reactionTimes.push(reactionTime);
-  if (reactionTimes.length > 20) reactionTimes.shift();
-
-  let baseScore = 0;
-  let color = '#fff';
-
-  if (entity.type === 'normal') {
-    baseScore = 100;
-    color = '#fff';
-    combo.value++;
-  } else if (entity.type === 'golden') {
-    baseScore = 300;
-    color = '#ffcc80';
-    combo.value++;
-  } else if (entity.type === 'bomb') {
-    baseScore = -200;
-    color = '#ff3366';
-    bombsHit.value++;
-    breakCombo();
-  }
-
-  if (combo.value > maxCombo.value) {
-    maxCombo.value = combo.value;
-  }
-
-  // Check Fever trigger
-  if (combo.value === 20 && !isFever.value) {
-    triggerFever();
-  }
-
-  // Apply multiplier (bombs don't get multiplied to be fair, or maybe they do? Let's multiply penalties too)
-  const scoreChange = Math.floor(baseScore * multiplier.value);
-  score.value += scoreChange;
-
-  enforceAntiCheat(); // 점수가 너무 높아졌는지 실시간 검사
-
-  if (holes.value[index] && holes.value[index].id === entity.id) {
-    holes.value[index].isHit = true;
-    holes.value[index].floatingScore =
-      scoreChange > 0 ? `+${scoreChange}` : `${scoreChange}`;
-    holes.value[index].floatingColor = color;
-    clearTimeout(holes.value[index].timeoutId);
-
-    // 두더지를 성공적으로 잡은 경우 즉시 다음 두더지 스폰
-    clearTimeout(spawnTimer);
-    const newType = spawnEntity();
-    const nextDelay = newType === 'bomb' ? getSpawnDelay() * 0.4 : null;
-    scheduleSpawn(nextDelay);
-
-    setTimeout(() => {
-      if (holes.value[index] && holes.value[index].id === entity.id) {
-        holes.value[index].active = false;
-        holes.value[index].isHit = false;
-      }
-    }, 400);
-  }
-};
-
-onUnmounted(() => {
-  window.removeEventListener('pointerdown', trackInputTypePointer, {
-    capture: true,
-  });
-  window.removeEventListener('touchstart', trackInputTypeTouch, {
-    capture: true,
-  });
-  window.removeEventListener('click', catchUntrustedEvent, { capture: true });
-  window.removeEventListener('mousedown', catchUntrustedEvent, {
-    capture: true,
-  });
-  clearInterval(countdownTimer);
-  clearInterval(gameTimer);
-  clearTimeout(spawnTimer);
-  clearTimeout(feverTimer);
-});
+const onAuthSuccess = (userData) => {
+  auth.handleAuthSuccess(userData, authMode.value)
+  game.gameState.value = 'menu'
+}
+
+const onLogout = () => {
+  auth.logout()
+}
+
+// ── 게임 보드 이벤트 ──
+const onHit = (index, entity) => {
+  game.handleHit(index, entity)
+}
+
+const onCatchMacro = () => {
+  antiCheat.catchMacro(game.quitGame)
+}
 </script>
 
 <template>
-  <div class="app-wrapper" :class="{ 'fever-active': isFever }">
+  <div class="app-wrapper" :class="{ 'fever-active': game.isFever.value }">
     <div class="game-container">
-      <!-- 칠판 패치 노트 (게임 컨테이너 기준 우측 상단 배치) -->
-      <div v-if="gameState === 'menu'" class="patch-board">
-        <div class="patch-title">📌 패치 노트</div>
-        <ul class="patch-list">
-          <li v-for="(text, i) in patchNotes" :key="i">
-            <span class="patch-version">{{ i + 1 }}.</span>
-            {{ text }}
-          </li>
-        </ul>
-      </div>
+      <!-- 패치노트 칠판 (메뉴 화면에서만 표시) -->
+      <PatchBoard v-if="game.gameState.value === 'menu'" :notes="patchNotes" />
 
-      <!-- Top Info Bar -->
-      <div class="top-info" v-if="currentName">
-        <div class="personal-best">TOP: {{ dbBestScore }}</div>
-        <button
-          v-if="gameState === 'playing'"
-          @click="quitGame"
-          class="quit-btn"
-        >
-          포기하기
-        </button>
-      </div>
+      <!-- 게임 상단: 점수, 타이머, 콤보, 포기 버튼 -->
+      <GameHeader
+        :score="game.score.value"
+        :time-left="game.timeLeft.value"
+        :combo="game.combo.value"
+        :multiplier="game.multiplier.value"
+        :is-fever="game.isFever.value"
+        :db-best-score="auth.dbBestScore.value"
+        :current-name="auth.currentName.value"
+        :is-playing="game.gameState.value === 'playing'"
+        @quit="game.quitGame"
+      />
 
-      <header class="game-header">
-        <div class="score-container">
-          <div class="huge-score" :class="{ negative: score < 0 }">
-            {{ score }}
-          </div>
-          <div
-            class="timer-badge"
-            :class="{ warning: timeLeft <= 5 && gameState === 'playing' }"
-          >
-            TIME: {{ timeLeft }}s
-          </div>
-        </div>
-      </header>
-
-      <!-- Combo Overlay (Absolute positioned to top right) -->
-      <div
-        v-if="combo > 1 && gameState === 'playing'"
-        class="combo-overlay"
-        :key="combo"
+      <!-- 게임 보드 -->
+      <GameBoard
+        :holes="game.holes.value"
+        :honeypot-entity="antiCheat.honeypotEntity.value"
+        v-model:hole-elements="holeElements"
+        @hit="onHit"
+        @catch-macro="onCatchMacro"
       >
-        <div
-          class="huge-combo"
-          :class="{ 'combo-high': combo >= 10, 'combo-fever': combo >= 20 }"
-        >
-          {{ combo }} COMBO!
-          <span v-if="multiplier > 1" class="multiplier"
-            >x{{ multiplier }}</span
-          >
-        </div>
-      </div>
+        <!-- 오버레이들은 board-wrapper 내부에 위치 -->
 
-      <div class="board-wrapper">
-        <div class="grid">
-          <Hole
-            v-for="(entity, index) in holes"
-            :key="index"
-            :ref="
-              (el) => {
-                if (el) holeElements[index] = el;
-              }
-            "
-            :entity="entity"
-            @hit="handleHit(index, entity)"
-          />
-        </div>
+        <!-- 메인 메뉴 -->
+        <MainMenu
+          v-if="game.gameState.value === 'menu'"
+          :current-name="auth.currentName.value"
+          @start-game="game.prepareGame"
+          @show-auth="onShowAuth"
+          @show-leaderboard="game.gameState.value = 'leaderboard'"
+          @show-my-record="game.gameState.value = 'my_record'"
+          @logout="onLogout"
+        />
 
-        <!-- 매크로 전용 함정: 사람은 볼 수 없고 DOM 스캐너만 클릭합니다. -->
-        <div
-          style="
-            position: absolute;
-            top: -9999px;
-            left: -9999px;
-            width: 1px;
-            height: 1px;
-            opacity: 0;
-            pointer-events: auto;
-            overflow: hidden;
-          "
-          aria-hidden="true"
-        >
-          <Hole :entity="honeypotEntity" @hit="catchMacro" />
-        </div>
-
-        <!-- Overlays -->
-        <div v-if="gameState === 'menu'" class="overlay menu-overlay">
-          <div class="crt-lines"></div>
-          <div class="particles-bg"></div>
-
-          <PixelMascot />
-
-          <h1 class="main-title">두더지 게임</h1>
-          <p class="subtitle">네오 아케이드 에디션</p>
-
-          <div class="legend" v-if="currentName">
-            <div class="legend-item welcome-msg">
-              반가워요, <span class="player-name">{{ currentName }}</span> 님!
-            </div>
-          </div>
-          <div class="legend" v-else>
-            <div class="legend-item">
-              <span style="color: #795548">■</span> Normal (+100)
-            </div>
-            <div class="legend-item">
-              <span style="color: #ffb300">■</span> Golden (+300)
-            </div>
-            <div class="legend-item">
-              <span style="color: #212121">■</span> Bomb (-200)
-            </div>
-            <div class="legend-item mt-small">⚡ 20 Combo = FEVER MODE!</div>
-          </div>
-          <div class="buttons-row">
-            <template v-if="!currentName">
-              <button @click="startAuth('login')" class="action-btn neon-btn">
-                로그인
-              </button>
-              <button
-                @click="startAuth('register')"
-                class="action-btn neon-btn"
-              >
-                회원가입
-              </button>
-            </template>
-            <button v-else @click="prepareGame" class="action-btn neon-btn">
-              게임 시작
-            </button>
-            <button
-              @click="gameState = 'leaderboard'"
-              class="action-btn neon-btn"
-            >
-              랭킹
-            </button>
-            <button
-              v-if="currentName"
-              @click="gameState = 'my_record'"
-              class="action-btn neon-btn"
-            >
-              내 기록
-            </button>
-            <button
-              v-if="currentName"
-              @click="
-                currentName = '';
-                identifyUser(null);
-              "
-              class="action-btn neon-btn"
-            >
-              로그아웃
-            </button>
-          </div>
-        </div>
-
-        <div v-if="gameState === 'auth'" class="overlay">
+        <!-- 인증 모달 -->
+        <div v-if="game.gameState.value === 'auth'" class="overlay">
           <AuthModal
             :mode="authMode"
-            @close="gameState = 'menu'"
-            @auth-success="handleAuthSuccess"
+            @close="game.gameState.value = 'menu'"
+            @auth-success="onAuthSuccess"
           />
         </div>
 
-        <div v-if="gameState === 'countdown'" class="overlay">
-          <div class="countdown-text">{{ countdownValue }}</div>
-        </div>
+        <!-- 카운트다운 -->
+        <CountdownOverlay
+          v-if="game.gameState.value === 'countdown'"
+          :value="game.countdownValue.value"
+        />
 
-        <div v-if="gameState === 'leaderboard'" class="overlay">
+        <!-- 리더보드 -->
+        <div v-if="game.gameState.value === 'leaderboard'" class="overlay">
           <Leaderboard
-            :current-score="score"
-            :current-name="currentName"
-            @close="gameState = 'menu'"
+            :current-score="game.score.value"
+            :current-name="auth.currentName.value"
+            @close="game.gameState.value = 'menu'"
           />
         </div>
 
-        <div v-if="gameState === 'my_record'" class="overlay">
-          <MyRecord :currentName="currentName" @close="gameState = 'menu'" />
+        <!-- 내 기록 -->
+        <div v-if="game.gameState.value === 'my_record'" class="overlay">
+          <MyRecord
+            :current-name="auth.currentName.value"
+            @close="game.gameState.value = 'menu'"
+          />
         </div>
 
-        <!-- 매크로/봇 적발 시 띄워주는 전용 경고 모달 -->
-        <div v-if="showAntiCheatModal" class="overlay" style="z-index: 2000">
-          <AntiCheatModal @close="showAntiCheatModal = false" />
+        <!-- 안티치트 경고 모달 -->
+        <div v-if="antiCheat.showAntiCheatModal.value" class="overlay" style="z-index: 2000">
+          <AntiCheatModal @close="antiCheat.showAntiCheatModal.value = false" />
         </div>
-      </div>
+      </GameBoard>
     </div>
   </div>
 </template>
@@ -845,8 +169,6 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
-/* Fever Background Animation applied to wrapper if we wanted, but we can't change body from scoped easily. 
-   We will rely on CSS variables or global styles if needed, or just animate the app-wrapper. */
 .fever-active {
   animation: feverPulse 0.5s infinite alternate;
 }
@@ -871,180 +193,9 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
-.top-info {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  margin-bottom: 5px;
-  color: #ffcc80;
-  font-size: 1.2rem;
-  letter-spacing: 1px;
-}
-
-.quit-btn {
-  background: none;
-  border: 1px solid #ff3366;
-  color: #ff3366;
-  padding: 4px 10px;
-  font-size: 0.9rem;
-  font-family: var(--font-pixel);
-  cursor: pointer;
-  border-radius: 4px;
-  margin-left: 15px;
-  transition: all 0.2s;
-}
-
-.quit-btn:hover {
-  background: #ff3366;
-  color: #000;
-}
-
-.game-header {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-bottom: 20px;
-  background-color: transparent;
-  padding: 0;
-  border: none;
-  box-shadow: none;
-  height: auto;
-}
-
-.score-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.huge-score {
-  font-size: 5rem;
-  color: #00ffcc;
-  text-shadow:
-    0 0 20px #00ffcc,
-    0 0 40px rgba(0, 255, 204, 0.5);
-  line-height: 1;
-  transition:
-    color 0.3s,
-    text-shadow 0.3s;
-}
-
-.huge-score.negative {
-  color: #ff3366;
-  text-shadow:
-    0 0 20px #ff3366,
-    0 0 40px rgba(255, 51, 102, 0.5);
-}
-
-.timer-badge {
-  background-color: #222;
-  color: #fff;
-  padding: 5px 20px;
-  border-radius: 20px;
-  font-size: 1.5rem;
-  border: 2px solid #555;
-}
-
-.timer-badge.warning {
-  border-color: #ff3366;
-  color: #ff3366;
-  animation: pulse 1s infinite;
-}
-
-.combo-overlay {
-  position: absolute;
-  top: -10px;
-  right: 10px;
-  z-index: 100;
-  pointer-events: none;
-}
-
-.huge-combo {
-  font-size: 4rem;
-  color: #ff00de;
-  text-shadow:
-    0 0 20px #ff00de,
-    0 0 40px #ff00de;
-  white-space: nowrap;
-  animation: popBounce 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-
-.combo-high {
-  color: #ffeb3b;
-  text-shadow:
-    0 0 20px #ffeb3b,
-    0 0 40px #ffeb3b;
-  font-size: 5rem;
-}
-
-.combo-fever {
-  color: #ff0000;
-  text-shadow:
-    0 0 20px #ff0000,
-    0 0 40px #ff0000,
-    0 0 60px #ff0000;
-  font-size: 6rem;
-  animation:
-    popBounce 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275),
-    shake 0.2s infinite;
-}
-
-.multiplier {
-  font-size: 0.6em;
-  color: #fff;
-  vertical-align: top;
-  text-shadow: none;
-}
-
-@keyframes popBounce {
-  0% {
-    transform: scale(0.5) translateY(50px);
-    opacity: 0;
-  }
-  50% {
-    transform: scale(1.2) translateY(-20px);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1) translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes pulse {
-  0% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
-  100% {
-    opacity: 1;
-  }
-}
-
-.board-wrapper {
-  position: relative;
-  background-color: var(--grid-bg);
-  padding: 15px;
-  border-radius: 12px;
-  border: 4px solid var(--hole-color);
-  box-shadow: 0 8px 0 rgba(0, 0, 0, 0.5);
-}
-
-.fever-active .board-wrapper {
+.fever-active .game-container :deep(.board-wrapper) {
   border-color: #ff00de;
   box-shadow: 0 0 30px rgba(255, 0, 222, 0.5);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  grid-template-rows: repeat(4, 1fr);
-  gap: 15px;
-  width: 100%;
-  aspect-ratio: 1 / 1;
 }
 
 .overlay {
@@ -1061,209 +212,5 @@ onUnmounted(() => {
   justify-content: center;
   z-index: 1000;
   overflow: hidden;
-}
-
-.menu-overlay {
-  background: radial-gradient(circle at center, #1a1a2e 0%, #0a0a0c 100%);
-}
-
-.countdown-text {
-  font-size: 8rem;
-  color: #00ffcc;
-  text-shadow: 0 0 20px #00ffcc;
-  animation: pop 1s infinite;
-  font-family: var(--font-pixel);
-  z-index: 20;
-}
-
-@keyframes pop {
-  0% {
-    transform: scale(0.5);
-    opacity: 0;
-  }
-  50% {
-    transform: scale(1.2);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 0;
-  }
-}
-
-.crt-lines {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background:
-    linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%),
-    linear-gradient(
-      90deg,
-      rgba(255, 0, 0, 0.03),
-      rgba(0, 255, 0, 0.01),
-      rgba(0, 0, 255, 0.03)
-    );
-  background-size:
-    100% 3px,
-    3px 100%;
-  pointer-events: none;
-  z-index: 10;
-}
-
-.particles-bg {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  background-image:
-    radial-gradient(1px 1px at 20px 30px, #fff, rgba(0, 0, 0, 0)),
-    radial-gradient(1px 1px at 40px 70px, #fff, rgba(0, 0, 0, 0)),
-    radial-gradient(1px 1px at 50px 160px, #fff, rgba(0, 0, 0, 0)),
-    radial-gradient(1px 1px at 80px 120px, #fff, rgba(0, 0, 0, 0)),
-    radial-gradient(1px 1px at 110px 10px, #fff, rgba(0, 0, 0, 0)),
-    radial-gradient(1px 1px at 150px 150px, #fff, rgba(0, 0, 0, 0));
-  background-repeat: repeat;
-  background-size: 200px 200px;
-  animation: bgScroll 20s linear infinite;
-  opacity: 0.2;
-  pointer-events: none;
-}
-
-@keyframes bgScroll {
-  from {
-    background-position: 0 0;
-  }
-  to {
-    background-position: 0 200px;
-  }
-}
-
-.main-title {
-  font-size: 4.5rem;
-  background: linear-gradient(to bottom, #fff 0%, #00ffcc 50%, #00ccaa 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 0 15px rgba(0, 255, 204, 0.4));
-  margin-bottom: 5px;
-  letter-spacing: -2px;
-  z-index: 20;
-}
-
-.welcome-msg {
-  color: #fff !important;
-  font-size: 1.6rem !important;
-  justify-content: center !important;
-}
-
-.player-name {
-  color: #00ffcc;
-  text-shadow: 0 0 10px #00ffcc;
-  font-weight: bold;
-}
-
-.subtitle {
-  color: #fff;
-  margin-bottom: 30px;
-  font-size: 1.2rem;
-  letter-spacing: 2px;
-}
-
-.legend {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 30px;
-  text-align: left;
-  background-color: rgba(0, 0, 0, 0.5);
-  padding: 15px 25px;
-  border-radius: 8px;
-  border: 2px solid var(--hole-color);
-}
-
-.legend-item {
-  font-size: 1.2rem;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.mt-small {
-  margin-top: 10px;
-  color: #ffeb3b;
-  font-size: 1rem;
-}
-
-.buttons-row {
-  display: flex;
-  gap: 15px;
-  position: relative;
-  z-index: 20;
-}
-
-.action-btn {
-  font-size: 1.2rem;
-  padding: 15px 25px;
-}
-
-.neon-btn {
-  border-color: #00ffcc;
-  box-shadow: 0 0 10px #00ffcc;
-}
-.neon-btn:hover {
-  background-color: #00ffcc;
-  color: #000;
-}
-
-@keyframes shake {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-  25% {
-    transform: translateX(-2px) rotate(-2deg);
-  }
-  75% {
-    transform: translateX(2px) rotate(2deg);
-  }
-}
-
-.patch-board {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  background-color: #2b4f36; /* 칠판 녹색 */
-  border: 4px solid #5c3a21; /* 나무 테두리 */
-  border-radius: 4px;
-  padding: 10px;
-  width: 160px;
-  box-shadow:
-    4px 4px 10px rgba(0, 0, 0, 0.6),
-    inset 0 0 10px rgba(0, 0, 0, 0.3);
-  color: #f8f8f8; /* 분필 하얀색 */
-  z-index: 2000;
-  transform: rotate(3deg); /* 살짝 비뚤게 툭 걸어둔 느낌 */
-  font-family: var(--font-pixel), sans-serif;
-}
-
-.patch-title {
-  font-size: 0.9rem;
-  margin-bottom: 8px;
-  text-align: center;
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.4);
-  padding-bottom: 5px;
-}
-
-.patch-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  font-size: 0.7rem;
-  line-height: 1.5;
-  text-align: left;
-}
-
-.patch-version {
-  color: #ffcc80; /* 버전 포인트 컬러 */
 }
 </style>

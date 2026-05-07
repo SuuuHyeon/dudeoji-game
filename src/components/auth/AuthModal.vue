@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue'
-import { supabase } from '../lib/supabase.js'
+import { verifyUserPin, registerUser } from '../../services/api.js'
 
 const props = defineProps({
   mode: {
@@ -42,12 +42,7 @@ const handleSubmit = async () => {
 
   try {
     if (props.mode === 'login') {
-      const { data, error } = await supabase.rpc('verify_user_pin', {
-        p_name: name.value,
-        p_pin: pin.value
-      })
-
-      if (error) throw error
+      const data = await verifyUserPin(name.value, pin.value)
 
       if (!data || data.length === 0) {
         errorMsg.value = '존재하지 않는 닉네임입니다.'
@@ -60,13 +55,8 @@ const handleSubmit = async () => {
         emit('auth-success', { name: name.value, pin: pin.value, score: data[0].user_score || 0 })
       }
     } else if (props.mode === 'register') {
-      const { data, error } = await supabase.rpc('register_user', {
-        p_name: name.value,
-        p_pin: pin.value
-      })
+      const data = await registerUser(name.value, pin.value)
         
-      if (error) throw error
-
       if (data === false) {
         errorMsg.value = '이미 사용 중인 닉네임입니다.'
         pin.value = ''

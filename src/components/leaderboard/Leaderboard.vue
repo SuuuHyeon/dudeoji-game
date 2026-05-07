@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { supabase, isMock } from '../lib/supabase.js'
+import { isMock } from '../../lib/supabase.js'
+import { fetchLeaderboard } from '../../services/api.js'
 
 const props = defineProps({
   currentScore: {
@@ -18,17 +19,10 @@ const emit = defineEmits(['close'])
 const scores = ref([])
 const loading = ref(true)
 
-const fetchScores = async () => {
+const loadScores = async () => {
   loading.value = true
   try {
-    const { data, error } = await supabase
-      .from('leaderboard')
-      .select('name, score')
-      .order('score', { ascending: false })
-      .limit(100)
-      
-    if (error) throw error
-    scores.value = data
+    scores.value = await fetchLeaderboard(100)
   } catch (err) {
     console.error('Error fetching leaderboard:', err)
   } finally {
@@ -37,7 +31,7 @@ const fetchScores = async () => {
 }
 
 onMounted(() => {
-  fetchScores()
+  loadScores()
 })
 </script>
 

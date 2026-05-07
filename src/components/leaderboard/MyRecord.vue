@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { supabase, isMock } from '../lib/supabase.js'
+import { fetchScoreHistory } from '../../services/api.js'
 
 const props = defineProps({
   currentName: {
@@ -14,17 +14,10 @@ const emit = defineEmits(['close'])
 const history = ref([])
 const loading = ref(true)
 
-const fetchHistory = async () => {
+const loadHistory = async () => {
   loading.value = true
   try {
-    const { data, error } = await supabase
-      .from('score_history')
-      .select('created_at, score')
-      .eq('name', props.currentName)
-      .order('created_at', { ascending: false })
-      
-    if (error) throw error
-    history.value = data || []
+    history.value = await fetchScoreHistory(props.currentName)
   } catch (err) {
     console.error('Error fetching history:', err)
   } finally {
@@ -38,7 +31,7 @@ const formatDate = (isoString) => {
 }
 
 onMounted(() => {
-  fetchHistory()
+  loadHistory()
 })
 </script>
 
