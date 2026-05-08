@@ -11,7 +11,7 @@
  * + 허니팟 함정 (DOM 스캐너 유인)
  * + 개발자도구/우클릭 차단
  */
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue';
 import {
   SUSPICIOUS_CLICK_THRESHOLD,
   SCORE_HARD_CAP,
@@ -28,20 +28,24 @@ import {
   COORDINATE_STD_DEV_THRESHOLD,
   COORDINATE_MIN_UNIQUE_HOLES,
   CLICK_EVENT_STALE_MS,
-} from '../constants/game.js'
+} from '../constants/game.js';
 
 export function useAntiCheat(gameState, score) {
   // ── 상태 ──
-  let suspiciousClicks = 0
-  let clickTimestamps = []
-  let reactionTimes = []
-  let lastClickEvent = null
-  let clickHistory = []
-  let mouseMoveEventCount = 0
-  let teleportCount = 0
-  let lastInputIsTouch = false
+  let suspiciousClicks = 0;
+  let clickTimestamps = [];
+  let reactionTimes = [];
+  let lastClickEvent = null;
+  let clickHistory = [];
+  let mouseMoveEventCount = 0;
+  let teleportCount = 0;
+  let lastInputIsTouch = false;
 
-  const showAntiCheatModal = ref(false)
+  // ── 텔레메트리 (데이터 수집용) ──
+  let telemetry = { reactionTimes: [], clicks: [], triggers: [] };
+  let flagReason = null;
+
+  const showAntiCheatModal = ref(false);
 
   // 허니팟: DOM 탐색 매크로를 유인하는 투명 가짜 두더지
   const honeypotEntity = ref({
@@ -53,26 +57,53 @@ export function useAntiCheat(gameState, score) {
     floatingColor: null,
     timeoutId: null,
     spawnTime: Date.now(),
-  })
+  });
+
+  /** 매크로 의심 사유(Trigger) 기록 */
+  const addTrigger = (reason) => {
+    if (!telemetry.triggers.includes(reason)) telemetry.triggers.push(reason);
+    if (!flagReason) flagReason = reason; // 가장 먼저 걸린 사유를 메인으로 기록
+  };
 
   // ── 핵심 검사 로직 ──
 
+  /** 브라우저 자동화 도구(Selenium, Puppeteer 등) 감지 (입구컷용) */
+  const detectWebDriver = () => {
+    // 1. 표준 WebDriver 속성 검사
+    if (navigator.webdriver) return true;
+
+    // 2. 크롬 드라이버 고유 속성 검사 (구/신버전 우회 차단)
+    if (window.document.documentElement.getAttribute('webdriver')) return true;
+    if (
+      window.cdc_adoQpoasnfa76pfcZLmcfl_Array ||
+      window.cdc_adoQpoasnfa76pfcZLmcfl_Promise
+    )
+      return true;
+
+    // 3. 브라우저 환경 변수 검사 (Headless 모드 검사 등)
+    if (navigator.userAgent.toLowerCase().includes('headless')) return true;
+    if (navigator.languages === '') return true;
+
+    return false;
+  };
+
   /** 안티치트 종합 검사 — 조건 도달 시 게임 강제 종료 */
   const enforceAntiCheat = (quitCallback) => {
-    if (gameState.value !== 'playing') return false
+    if (gameState.value !== 'playing') return false;
 
     // 반응속도 표준편차 분석 (봇의 일정한 클릭 패턴 검출)
     if (reactionTimes.length >= REACTION_TIME_SAMPLE_SIZE) {
       const mean =
-        reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length
+        reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length;
       const variance =
         reactionTimes.reduce((a, b) => a + Math.pow(b - mean, 2), 0) /
-        reactionTimes.length
-      const stdDev = Math.sqrt(variance)
+        reactionTimes.length;
+      const stdDev = Math.sqrt(variance);
 
       if (stdDev < REACTION_TIME_STD_DEV_THRESHOLD) {
-        suspiciousClicks += 5
-        reactionTimes = []
+        addTrigger('reaction_std_dev');
+        suspiciousClicks += 5;
+        reactionTimes = [];
       }
     }
 
@@ -81,60 +112,65 @@ export function useAntiCheat(gameState, score) {
       score.value > SCORE_HARD_CAP ||
       score.value < SCORE_LOWER_CAP
     ) {
-      quitCallback()
-      showAntiCheatModal.value = true
-      return true
+      quitCallback();
+      if (score.value > SCORE_HARD_CAP) addTrigger('score_hard_cap');
+      if (score.value < SCORE_LOWER_CAP) addTrigger('score_lower_cap');
+      showAntiCheatModal.value = true;
+      return true;
     }
 
-    return false
-  }
+    return false;
+  };
 
   /** 허니팟 클릭 시 (DOM 스캐너 적발) */
   const catchMacro = (quitCallback) => {
-    suspiciousClicks += 5
-    enforceAntiCheat(quitCallback)
-  }
+    addTrigger('honeypot');
+    suspiciousClicks += 5;
+    enforceAntiCheat(quitCallback);
+  };
 
   // ── 이벤트 핸들러 ──
 
   const onCatchUntrustedEvent = (e) => {
-    lastClickEvent = { time: Date.now(), x: e.clientX, y: e.clientY }
+    lastClickEvent = { time: Date.now(), x: e.clientX, y: e.clientY };
 
     if (!e.isTrusted) {
-      suspiciousClicks += 5
+      addTrigger('untrusted_event');
+      suspiciousClicks += 5;
       // enforceAntiCheat는 게임 로직 측에서 호출됨
     }
-  }
+  };
 
   const onTrackInputTypePointer = (e) => {
-    onCatchUntrustedEvent(e)
+    onCatchUntrustedEvent(e);
     if (e.pointerType === 'touch' || e.pointerType === 'pen') {
-      lastInputIsTouch = true
+      lastInputIsTouch = true;
     } else if (e.pointerType === 'mouse') {
-      lastInputIsTouch = false
+      lastInputIsTouch = false;
 
       // 광클 실시간 방어
       if (gameState.value === 'playing') {
-        const now = Date.now()
-        clickTimestamps.push(now)
+        const now = Date.now();
+        clickTimestamps.push(now);
         clickTimestamps = clickTimestamps.filter(
           (t) => now - t < RAPID_CLICK_WINDOW_MS,
-        )
+        );
 
         if (clickTimestamps.length >= RAPID_CLICK_LIMIT) {
-          suspiciousClicks += 5
+          addTrigger('rapid_click');
+          suspiciousClicks += 5;
         }
       }
     }
-  }
+  };
 
   const onTrackInputTypeTouch = () => {
-    lastInputIsTouch = true
-  }
+    lastInputIsTouch = true;
+  };
 
   const onMouseMove = () => {
-    mouseMoveEventCount++
-  }
+    mouseMoveEventCount++;
+  };
 
   // ── 타격 검증 ──
 
@@ -144,140 +180,160 @@ export function useAntiCheat(gameState, score) {
    */
   const validateHit = (index, spawnTime, holeEl) => {
     // 터치 입력이면 무시
-    if (lastInputIsTouch) return { blocked: true }
+    if (lastInputIsTouch) return { blocked: true };
 
     // 1. 함수 직접 호출 방어 (Vue Devtools 등)
-    if (!lastClickEvent || Date.now() - lastClickEvent.time > CLICK_EVENT_STALE_MS) {
-      suspiciousClicks += 5
-      return { blocked: true }
+    if (
+      !lastClickEvent ||
+      Date.now() - lastClickEvent.time > CLICK_EVENT_STALE_MS
+    ) {
+      addTrigger('stale_event');
+      suspiciousClicks += 5;
+      return { blocked: true };
     }
 
     // 2. 좌표 일관성 분석 & 순간이동 감지
     if (holeEl && lastClickEvent) {
-      const rect = holeEl.getBoundingClientRect()
+      const rect = holeEl.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        const relX = (lastClickEvent.x - rect.left) / rect.width
-        const relY = (lastClickEvent.y - rect.top) / rect.height
+        const relX = (lastClickEvent.x - rect.left) / rect.width;
+        const relY = (lastClickEvent.y - rect.top) / rect.height;
 
-        clickHistory.push({ index, relX, relY })
-        if (clickHistory.length > CLICK_HISTORY_SIZE) clickHistory.shift()
+        // 텔레메트리 좌표 기록 (데이터 최적화를 위해 소수점 3자리까지만)
+        telemetry.clicks.push({
+          i: index,
+          x: Number(relX.toFixed(3)),
+          y: Number(relY.toFixed(3)),
+        });
+
+        clickHistory.push({ index, relX, relY });
+        if (clickHistory.length > CLICK_HISTORY_SIZE) clickHistory.shift();
 
         // [방어 A] 순간이동 감지
         if (!lastInputIsTouch && clickHistory.length >= 2) {
-          const lastClick = clickHistory[clickHistory.length - 2]
+          const lastClick = clickHistory[clickHistory.length - 2];
           if (lastClick.index !== index) {
             if (mouseMoveEventCount < TELEPORT_MOVE_THRESHOLD) {
-              teleportCount++
+              teleportCount++;
               if (teleportCount >= TELEPORT_STRIKE_LIMIT) {
-                suspiciousClicks += 5
-                return { blocked: true }
+                addTrigger('teleport');
+                suspiciousClicks += 5;
+                return { blocked: true };
               }
             } else {
-              teleportCount = 0
+              teleportCount = 0;
             }
           }
         }
-        mouseMoveEventCount = 0
+        mouseMoveEventCount = 0;
 
         // [방어 B] 클릭 좌표 일관성 검사
-        const uniqueHoles = new Set(clickHistory.map((c) => c.index))
+        const uniqueHoles = new Set(clickHistory.map((c) => c.index));
         if (uniqueHoles.size >= COORDINATE_MIN_UNIQUE_HOLES) {
-          const allX = clickHistory.map((c) => c.relX)
-          const allY = clickHistory.map((c) => c.relY)
+          const allX = clickHistory.map((c) => c.relX);
+          const allY = clickHistory.map((c) => c.relY);
 
-          const meanX = allX.reduce((a, b) => a + b, 0) / allX.length
-          const meanY = allY.reduce((a, b) => a + b, 0) / allY.length
+          const meanX = allX.reduce((a, b) => a + b, 0) / allX.length;
+          const meanY = allY.reduce((a, b) => a + b, 0) / allY.length;
           const stdDevX = Math.sqrt(
             allX.reduce((a, b) => a + Math.pow(b - meanX, 2), 0) / allX.length,
-          )
+          );
           const stdDevY = Math.sqrt(
             allY.reduce((a, b) => a + Math.pow(b - meanY, 2), 0) / allY.length,
-          )
+          );
 
           if (
             stdDevX < COORDINATE_STD_DEV_THRESHOLD &&
             stdDevY < COORDINATE_STD_DEV_THRESHOLD
           ) {
-            suspiciousClicks += 5
-            return { blocked: true }
+            addTrigger('coord_std_dev');
+            suspiciousClicks += 5;
+            return { blocked: true };
           }
         }
       }
     }
 
     // 3. 반응속도 하한선 검사
-    const reactionTime = Date.now() - spawnTime
+    const reactionTime = Date.now() - spawnTime;
+
+    // 텔레메트리 반응속도 기록
+    telemetry.reactionTimes.push(reactionTime);
+
     if (reactionTime < MIN_REACTION_TIME_MS) {
-      suspiciousClicks++
-      return { blocked: true }
+      addTrigger('fast_reaction');
+      suspiciousClicks++;
+      return { blocked: true };
     }
 
     // 정상 반응속도 기록 (표준편차 분석용)
-    reactionTimes.push(reactionTime)
-    if (reactionTimes.length > REACTION_TIME_MAX_HISTORY) reactionTimes.shift()
+    reactionTimes.push(reactionTime);
+    if (reactionTimes.length > REACTION_TIME_MAX_HISTORY) reactionTimes.shift();
 
-    return { blocked: false }
-  }
+    return { blocked: false };
+  };
 
   // ── 상태 초기화 (게임 시작 시) ──
 
   const reset = () => {
-    suspiciousClicks = 0
-    clickTimestamps = []
-    reactionTimes = []
-    clickHistory = []
-    mouseMoveEventCount = 0
-    teleportCount = 0
-    lastClickEvent = null
-  }
+    suspiciousClicks = 0;
+    clickTimestamps = [];
+    reactionTimes = [];
+    clickHistory = [];
+    mouseMoveEventCount = 0;
+    teleportCount = 0;
+    lastClickEvent = null;
+    telemetry = { reactionTimes: [], clicks: [], triggers: [] };
+    flagReason = null;
+  };
 
   /** 현재 의심 점수 확인 */
-  const isSuspicious = () => suspiciousClicks >= SUSPICIOUS_CLICK_THRESHOLD
+  const isSuspicious = () => suspiciousClicks >= SUSPICIOUS_CLICK_THRESHOLD;
 
   // ── 이벤트 리스너 관리 ──
 
   const setupEventListeners = () => {
-    window.addEventListener('mousemove', onMouseMove, { capture: true })
-    window.addEventListener('click', onCatchUntrustedEvent, { capture: true })
+    window.addEventListener('mousemove', onMouseMove, { capture: true });
+    window.addEventListener('click', onCatchUntrustedEvent, { capture: true });
     window.addEventListener('mousedown', onCatchUntrustedEvent, {
       capture: true,
-    })
+    });
     window.addEventListener('pointerdown', onTrackInputTypePointer, {
       capture: true,
-    })
+    });
     window.addEventListener('touchstart', onTrackInputTypeTouch, {
       capture: true,
-    })
+    });
 
     // 배포 환경에서 우클릭 및 개발자 도구 단축키 차단
     if (!import.meta.env.DEV) {
-      window.addEventListener('contextmenu', preventContextMenu)
-      window.addEventListener('keydown', preventDevTools)
+      window.addEventListener('contextmenu', preventContextMenu);
+      window.addEventListener('keydown', preventDevTools);
     }
-  }
+  };
 
   const cleanupEventListeners = () => {
-    window.removeEventListener('mousemove', onMouseMove, { capture: true })
+    window.removeEventListener('mousemove', onMouseMove, { capture: true });
     window.removeEventListener('click', onCatchUntrustedEvent, {
       capture: true,
-    })
+    });
     window.removeEventListener('mousedown', onCatchUntrustedEvent, {
       capture: true,
-    })
+    });
     window.removeEventListener('pointerdown', onTrackInputTypePointer, {
       capture: true,
-    })
+    });
     window.removeEventListener('touchstart', onTrackInputTypeTouch, {
       capture: true,
-    })
+    });
 
     if (!import.meta.env.DEV) {
-      window.removeEventListener('contextmenu', preventContextMenu)
-      window.removeEventListener('keydown', preventDevTools)
+      window.removeEventListener('contextmenu', preventContextMenu);
+      window.removeEventListener('keydown', preventDevTools);
     }
-  }
+  };
 
-  const preventContextMenu = (e) => e.preventDefault()
+  const preventContextMenu = (e) => e.preventDefault();
 
   const preventDevTools = (e) => {
     if (
@@ -291,21 +347,24 @@ export function useAntiCheat(gameState, score) {
         (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
       (e.metaKey && e.shiftKey && e.key === 'C')
     ) {
-      e.preventDefault()
+      e.preventDefault();
     }
-  }
+  };
 
   // 자동 등록/해제
-  onMounted(setupEventListeners)
-  onUnmounted(cleanupEventListeners)
+  onMounted(setupEventListeners);
+  onUnmounted(cleanupEventListeners);
 
   return {
     showAntiCheatModal,
     honeypotEntity,
+    detectWebDriver,
     enforceAntiCheat,
     catchMacro,
     validateHit,
     reset,
     isSuspicious,
-  }
+    getTelemetry: () => telemetry,
+    getFlagReason: () => flagReason,
+  };
 }
